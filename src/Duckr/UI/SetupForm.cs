@@ -1,326 +1,937 @@
 /*
- *  Duckr
+ *  Duckr - setup window.
  *  Licensed under GNU GPL v3. See LICENSE.
  *
- *  Setup window for Duckr (app lists, timing, hotkey). Built in code (no designer file) so it is
- *  easy to read and change. Shows live sound levels of every app, so you can
- *  see what the app hears and set the threshold by eye.
+ *  Drawn by hand in the same skin as the main window. Edits the three app
+ *  lists (click a row to type, with live search of running apps), the force
+ *  hotkey (recorded by pressing it) and how long sound must play before
+ *  ducking. Every change applies at once and is saved shortly after.
  */
+
+using System.Diagnostics;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Runtime.InteropServices;
+using Duckr.Skin;
 
 namespace Duckr
 {
     public sealed class SetupForm : Form
     {
-        private readonly DuckEngine m_engine;
-        private readonly bool m_dark;
+        // ---- logical layout (96 dpi pixels) -------------------------------------
+        private const int W = 460, H = 430;
 
-        private readonly CheckBox m_enabled = new() { Text = "Duckr on", AutoSize = true };
-        private readonly RadioButton m_scopeAll = new() { Text = "Lower all other apps (isolate the focused app)", AutoSize = true };
-        private readonly RadioButton m_scopeMusic = new() { Text = "Lower only music apps", AutoSize = true };
+        private static readonly RectangleF TitleBar = new(0, 0, W, 20);
+        private static readonly RectangleF BtnClose = new(W - 21, 5, 13, 11);
 
-        private readonly TrackBar m_level = new() { Minimum = 0, Maximum = 100, TickFrequency = 10, Width = 220 };
-        private readonly Label m_levelLabel = new() { AutoSize = true };
-        private readonly NumericUpDown m_duckFade = Num(0, 10000, 50);
-        private readonly NumericUpDown m_restoreFade = Num(0, 10000, 50);
-        private readonly NumericUpDown m_attack = Num(0, 5000, 10);
-        private readonly NumericUpDown m_release = Num(0, 30000, 100);
-        private readonly NumericUpDown m_threshold = Num(-90, 0, 1);
-        private readonly TextBox m_hotkey = new() { Width = 160 };
+        private const float TabTop = 30, TabH = 24, TabW = 140, TabGap = 8, TabX0 = 12;
+        private static readonly RectangleF HintLine = new(14, 59, W - 28, 14);
 
-        private readonly TextBox m_musicApps = MakeListBox();
-        private readonly TextBox m_neverApps = MakeListBox();
-        private readonly TextBox m_focusOnlyApps = MakeListBox();
+        private static readonly RectangleF ListWell = new(12, 78, 436, 186);
+        private const float RowH = 18;
 
-        private readonly ListView m_levels = new()
+        private static readonly RectangleF HelpLine = new(14, 268, W - 28, 12);
+
+        private const float SectionTop = 292;
+        private static readonly RectangleF HotkeyBox = new(150, SectionTop, 150, 20);
+        private static readonly RectangleF HotkeyClear = new(306, SectionTop + 2, 16, 16);
+
+        private const float AttackTop = SectionTop + 32;
+        private const float GrooveX1 = 150, GrooveX2 = 360, ReadoutX = 372, ReadoutW = 76;
+
+        private static readonly RectangleF BtnReset = new(12, 384, 120, 28);
+        private static readonly RectangleF BtnDone = new(W - 132, 384, 120, 28);
+
+        private enum ListKind { Music, Never, FocusOnly }
+
+        private static readonly (ListKind Kind, string Title, string Hint, Color Led)[] Tabs =
         {
-            View = View.Details, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable,
-            Height = 170, Dock = DockStyle.Fill, MultiSelect = false,
+            (ListKind.Music, "MUSIC APPS", "Apps that play your music. These are what get lowered in MUSIC ONLY mode.", SkinColors.LedYellow),
+            (ListKind.Never, "NEVER TOUCH", "Never lowered and never trigger lowering: calls, streaming, OBS.", SkinColors.LedRed),
+            (ListKind.FocusOnly, "WHILE FOCUSED", "For DAWs on ASIO: other apps are lowered the whole time these are focused.", SkinColors.LcdCyan),
         };
-        private readonly Label m_status = new() { AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
-        private readonly System.Windows.Forms.Timer m_refresh = new() { Interval = 120 };
-        private Font? m_boldFont;
-        private Font BoldFont => m_boldFont ??= new Font(m_levels.Font, FontStyle.Bold);
 
-        public SetupForm(DuckEngine engine, bool dark)
+        // ---- state ----------------------------------------------------------------
+        private readonly DuckEngine m_engine;
+        private readonly System.Windows.Forms.Timer m_anim = new() { Interval = 50 };
+        private readonly TextBox m_edit;
+
+        private readonly DotMatrix m_dots = new(new Font("Tahoma", 8f, FontStyle.Regular, GraphicsUnit.Pixel));
+        private readonly Font m_labelFont = new("Tahoma", 9f, FontStyle.Bold, GraphicsUnit.Pixel);
+        private readonly Font m_tinyFont = new("Tahoma", 8f, FontStyle.Bold, GraphicsUnit.Pixel);
+        private readonly Font m_listFont = new("Tahoma", 11f, FontStyle.Regular, GraphicsUnit.Pixel);
+        private readonly Font m_hintFont = new("Tahoma", 10f, FontStyle.Regular, GraphicsUnit.Pixel);
+        private Font? m_editFont;
+
+        private Bitmap? m_background;
+        private float m_scale = 1f;
+        private int m_frame;
+
+        private ListKind m_tab = ListKind.Music;
+        private int m_scroll;
+        private object? m_hot;
+        private bool m_draggingAttack;
+        private bool m_capturingHotkey;
+
+        private int m_editIndex = -1;            // row being edited; == list count means "new"
+        private readonly List<RunningApp> m_suggestions = new();
+        private int m_suggestSel = -1;
+
+        private Dictionary<string, AppStatus> m_running = new(StringComparer.OrdinalIgnoreCase);
+        private long m_runningAtMs = -100_000;
+        private readonly Stopwatch m_clock = Stopwatch.StartNew();
+
+        private enum AppStatus { Running, Audio, Playing }
+
+        private sealed record RunningApp(string Name, AppStatus Status);
+
+        private sealed record RowHit(int Index, string Part); // Part: "name", "x", "add"
+        private sealed record SuggestHit(int Index);
+        private sealed record TabHit(ListKind Kind);
+
+        public SetupForm(DuckEngine engine)
         {
             m_engine = engine;
-            m_dark = dark;
 
             Text = "Duckr setup";
+            FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
-            FormBorderStyle = FormBorderStyle.Sizable;
-            MinimumSize = new Size(640, 640);
-            Size = new Size(720, 760);
-            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            ShowInTaskbar = true;
+            KeyPreview = true;
+            BackColor = SkinColors.MetalBottom;
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            BuildLayout();
-            LoadFrom(engine.Settings);
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
-            m_level.ValueChanged += (_, _) => m_levelLabel.Text = m_level.Value == 0 ? "muted" : $"{m_level.Value}%";
-            m_refresh.Tick += (_, _) => RefreshLive();
-            Shown += (_, _) => m_refresh.Start();
-            FormClosed += (_, _) => { m_refresh.Dispose(); m_boldFont?.Dispose(); };
+            m_edit = new TextBox
+            {
+                BorderStyle = BorderStyle.None,
+                BackColor = Color.FromArgb(0, 0, 90),
+                ForeColor = Color.White,
+                Visible = false,
+            };
+            m_edit.TextChanged += (_, _) => UpdateSuggestions();
+            m_edit.KeyDown += EditKeyDown;
+            Controls.Add(m_edit);
 
-            if (m_dark) ApplyDark(this);
+            ApplyScale();
+            RefreshRunning(force: true);
+
+            m_anim.Tick += (_, _) =>
+            {
+                m_frame++;
+                if (m_clock.ElapsedMilliseconds - m_runningAtMs > 2000) RefreshRunning();
+                Invalidate();
+            };
+            VisibleChanged += (_, _) => { if (Visible) m_anim.Start(); else m_anim.Stop(); };
+            DpiChanged += (_, _) => ApplyScale();
+            Deactivate += (_, _) => { if (m_editIndex >= 0) CommitEdit(m_edit.Text); };
         }
 
-        // ---- layout -------------------------------------------------------------
-
-        private void BuildLayout()
+        protected override CreateParams CreateParams
         {
-            var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(12), AutoScroll = true };
-            Controls.Add(root);
-
-            root.Controls.Add(m_enabled);
-            root.Controls.Add(Hint("While you play something in the app you're focused on (Premiere, Resolve, a DAW, a player), " +
-                                   "other apps fade down. When it stops, they come back."));
-
-            // what to lower
-            var scope = Group("What to lower");
-            var scopeFlow = Flow();
-            scopeFlow.FlowDirection = FlowDirection.TopDown;
-            scopeFlow.Controls.Add(m_scopeAll);
-            scopeFlow.Controls.Add(m_scopeMusic);
-            scope.Controls.Add(scopeFlow);
-            root.Controls.Add(scope);
-
-            // levels and timing
-            var timing = Group("Level and timing");
-            var grid = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill };
-            var levelRow = Flow();
-            levelRow.Controls.Add(m_level);
-            levelRow.Controls.Add(m_levelLabel);
-            AddRow(grid, "Lower other apps to", levelRow);
-            AddRow(grid, "Fade down (ms)", m_duckFade);
-            AddRow(grid, "Fade back up (ms)", m_restoreFade);
-            AddRow(grid, "Must play for (ms) before lowering", m_attack);
-            AddRow(grid, "Wait after it stops (ms)", m_release);
-            AddRow(grid, "Counts as playing above (dB)", m_threshold);
-            AddRow(grid, "Force-lower hotkey", m_hotkey);
-            timing.Controls.Add(grid);
-            root.Controls.Add(timing);
-
-            // app lists
-            var lists = Group("Apps (one per line, process name without .exe, end with * to match the start)");
-            var listGrid = new TableLayoutPanel { ColumnCount = 3, Dock = DockStyle.Fill, AutoSize = true };
-            for (int i = 0; i < 3; i++) listGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
-            listGrid.Controls.Add(Caption("Music apps"), 0, 0);
-            listGrid.Controls.Add(Caption("Never touch (calls, OBS)"), 1, 0);
-            listGrid.Controls.Add(Caption("Lower while focused (ASIO DAWs)"), 2, 0);
-            listGrid.Controls.Add(m_musicApps, 0, 1);
-            listGrid.Controls.Add(m_neverApps, 1, 1);
-            listGrid.Controls.Add(m_focusOnlyApps, 2, 1);
-            lists.Controls.Add(listGrid);
-            root.Controls.Add(lists);
-            root.Controls.Add(Hint("DAWs using ASIO drivers skip the Windows mixer, so this app can't hear them play. " +
-                                   "Put those in the last list: other apps get lowered the whole time the DAW is focused."));
-
-            // live levels
-            var live = Group("Live sound levels (select an app and use the buttons to add it to a list)");
-            var liveGrid = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Fill, AutoSize = true };
-            m_levels.Columns.Add("App", 220);
-            m_levels.Columns.Add("Level", 200);
-            m_levels.Columns.Add("dB", 70);
-            liveGrid.Controls.Add(m_status);
-            liveGrid.Controls.Add(m_levels);
-            var addRow = Flow();
-            addRow.Controls.Add(MakeButton("Add to Music apps", (_, _) => AddSelectedTo(m_musicApps)));
-            addRow.Controls.Add(MakeButton("Add to Never touch", (_, _) => AddSelectedTo(m_neverApps)));
-            addRow.Controls.Add(MakeButton("Add to Lower while focused", (_, _) => AddSelectedTo(m_focusOnlyApps)));
-            liveGrid.Controls.Add(addRow);
-            live.Controls.Add(liveGrid);
-            root.Controls.Add(live);
-
-            // buttons
-            var buttons = Flow();
-            buttons.FlowDirection = FlowDirection.RightToLeft;
-            buttons.Dock = DockStyle.Fill;
-            var save = MakeButton("Save", (_, _) => SaveAndClose());
-            var cancel = MakeButton("Cancel", (_, _) => Close());
-            buttons.Controls.Add(save);
-            buttons.Controls.Add(cancel);
-            buttons.Controls.Add(MakeButton("Restore defaults", (_, _) => LoadFrom(new DuckrSettings())));
-            root.Controls.Add(buttons);
-            AcceptButton = save;
-            CancelButton = cancel;
-        }
-
-        // ---- data ---------------------------------------------------------------
-
-        private void LoadFrom(DuckrSettings s)
-        {
-            m_enabled.Checked = s.Enabled;
-            m_scopeAll.Checked = s.Scope == DuckScope.AllOtherApps;
-            m_scopeMusic.Checked = s.Scope == DuckScope.MusicAppsOnly;
-            m_level.Value = Math.Clamp(s.DuckLevelPercent, 0, 100);
-            m_levelLabel.Text = m_level.Value == 0 ? "muted" : $"{m_level.Value}%";
-            m_duckFade.Value = s.DuckFadeMs;
-            m_restoreFade.Value = s.RestoreFadeMs;
-            m_attack.Value = s.AttackMs;
-            m_release.Value = s.ReleaseMs;
-            m_threshold.Value = s.ThresholdDb;
-            m_hotkey.Text = s.ForceDuckHotkey;
-            m_musicApps.Lines = s.MusicApps.ToArray();
-            m_neverApps.Lines = s.NeverTouchApps.ToArray();
-            m_focusOnlyApps.Lines = s.FocusOnlyApps.ToArray();
-        }
-
-        private DuckrSettings ReadForm() => new DuckrSettings
-        {
-            Enabled = m_enabled.Checked,
-            Scope = m_scopeMusic.Checked ? DuckScope.MusicAppsOnly : DuckScope.AllOtherApps,
-            DuckLevelPercent = m_level.Value,
-            DuckFadeMs = (int)m_duckFade.Value,
-            RestoreFadeMs = (int)m_restoreFade.Value,
-            AttackMs = (int)m_attack.Value,
-            ReleaseMs = (int)m_release.Value,
-            ThresholdDb = (int)m_threshold.Value,
-            ForceDuckHotkey = m_hotkey.Text.Trim(),
-            MusicApps = Lines(m_musicApps),
-            NeverTouchApps = Lines(m_neverApps),
-            FocusOnlyApps = Lines(m_focusOnlyApps),
-        }.Sanitized();
-
-        private void SaveAndClose()
-        {
-            var s = ReadForm();
-            if (s.ForceDuckHotkey.Length > 0 && !HotkeyWindow.TryParse(s.ForceDuckHotkey, out _, out _))
+            get
             {
-                MessageBox.Show(this, "The hotkey should look like Ctrl+Alt+D or Ctrl+Shift+F9 (needs at least one of Ctrl, Alt, Shift, Win).",
-                    "Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            try
-            {
-                s.Save();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, "Could not save settings: " + ex.Message, "Save", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-            SettingsSaved?.Invoke(this, s);
-            Close();
-        }
-
-        /// <summary>Raised with the new settings after a successful save.</summary>
-        public event EventHandler<DuckrSettings>? SettingsSaved;
-
-        private void AddSelectedTo(TextBox list)
-        {
-            if (m_levels.SelectedItems.Count == 0) return;
-            string name = m_levels.SelectedItems[0].Text;
-            var lines = Lines(list);
-            if (!DuckrSettings.Matches(lines, name))
-            {
-                lines.Add(name);
-                list.Lines = lines.ToArray();
+                const int CS_DROPSHADOW = 0x20000;
+                var cp = base.CreateParams;
+                cp.ClassStyle |= CS_DROPSHADOW;
+                return cp;
             }
         }
 
-        private void RefreshLive()
+        // ---- data helpers ---------------------------------------------------------------
+
+        private List<string> CurrentList()
         {
-            if (!m_engine.IsRunning)
+            var s = m_engine.Settings;
+            return m_tab switch
             {
-                m_status.Text = "Duckr is off. Turn it on and save to see live levels.";
-                return;
+                ListKind.Music => s.MusicApps,
+                ListKind.Never => s.NeverTouchApps,
+                _ => s.FocusOnlyApps,
+            };
+        }
+
+        private static List<string> DefaultList(ListKind kind)
+        {
+            var d = new DuckrSettings();
+            return kind switch
+            {
+                ListKind.Music => d.MusicApps,
+                ListKind.Never => d.NeverTouchApps,
+                _ => d.FocusOnlyApps,
+            };
+        }
+
+        /// <summary>Which apps are running, using audio, or playing right now.</summary>
+        private void RefreshRunning(bool force = false)
+        {
+            m_runningAtMs = m_clock.ElapsedMilliseconds;
+            var map = new Dictionary<string, AppStatus>(StringComparer.OrdinalIgnoreCase);
+
+            // apps with a window
+            foreach (var p in Process.GetProcesses())
+            {
+                try
+                {
+                    if (p.MainWindowHandle != IntPtr.Zero && p.Id != Environment.ProcessId)
+                        map[p.ProcessName] = AppStatus.Running;
+                }
+                catch { /* access denied for some system processes */ }
+                finally { p.Dispose(); }
             }
 
-            string forced = m_engine.ForceDuck ? " (forced by hotkey)" : "";
-            string focused = m_engine.FocusedApp.Length > 0 ? m_engine.FocusedApp : "(none)";
-            m_status.Text = $"Focused: {focused}    State: {m_engine.State}{forced}";
-
-            string? selected = m_levels.SelectedItems.Count > 0 ? m_levels.SelectedItems[0].Text : null;
-            float thresholdDb = (float)m_threshold.Value;
-
-            m_levels.BeginUpdate();
-            m_levels.Items.Clear();
+            // apps with an audio session (works only while Duckr is on)
             foreach (var (name, peak) in m_engine.SnapshotLevels())
             {
                 if (string.IsNullOrEmpty(name)) continue;
-                double db = peak > 0 ? 20 * Math.Log10(peak) : -90;
-                int bars = (int)Math.Round(Math.Clamp((db + 60) / 60, 0, 1) * 24);
-                var item = new ListViewItem(name);
-                item.SubItems.Add(new string('|', bars));
-                item.SubItems.Add(peak > 0 ? $"{db:0}" : "-inf");
-                if (db >= thresholdDb) item.ForeColor = Color.SeaGreen;
-                if (name.Equals(m_engine.FocusedApp, StringComparison.OrdinalIgnoreCase)) item.Font = BoldFont;
-                m_levels.Items.Add(item);
-                if (name == selected) item.Selected = true;
+                map[name] = peak > 0.001f ? AppStatus.Playing : AppStatus.Audio;
             }
-            m_levels.EndUpdate();
+
+            m_running = map;
+            if (m_editIndex >= 0 && !force) UpdateSuggestions();
         }
 
-        // ---- small helpers ------------------------------------------------------
-
-        private static List<string> Lines(TextBox box) =>
-            box.Lines.Select(l => l.Trim()).Where(l => l.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-
-        private static NumericUpDown Num(int min, int max, int step) =>
-            new() { Minimum = min, Maximum = max, Increment = step, Width = 90 };
-
-        private static TextBox MakeListBox() =>
-            new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Height = 120, Dock = DockStyle.Fill, AcceptsReturn = true };
-
-        private static GroupBox Group(string title) =>
-            new() { Text = title, Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
-
-        private static FlowLayoutPanel Flow() =>
-            new() { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill };
-
-        private static Label Caption(string text) => new() { Text = text, AutoSize = true };
-
-        private static Label Hint(string text) =>
-            new() { Text = text, AutoSize = true, MaximumSize = new Size(660, 0), ForeColor = SystemColors.GrayText, Margin = new Padding(3, 2, 3, 8) };
-
-        private static Button MakeButton(string text, EventHandler onClick)
+        private AppStatus? StatusOf(string entry)
         {
-            var b = new Button { Text = text, AutoSize = true, Padding = new Padding(6, 2, 6, 2) };
-            b.Click += onClick;
-            return b;
-        }
-
-        private static void AddRow(TableLayoutPanel grid, string label, Control control)
-        {
-            int row = grid.RowCount++;
-            grid.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 12, 3) }, 0, row);
-            grid.Controls.Add(control, 1, row);
-        }
-
-        /// <summary>Skin colors: gunmetal body, gold labels, green-on-black fields.</summary>
-        private static void ApplyDark(Control parent)
-        {
-            var back = Color.FromArgb(40, 42, 60);
-            var field = Color.FromArgb(4, 10, 6);
-            var green = Color.FromArgb(0, 236, 96);
-            var gold = Color.FromArgb(232, 196, 104);
-            var hint = Color.FromArgb(160, 150, 120);
-
-            switch (parent)
+            AppStatus? best = null;
+            foreach (var (name, st) in m_running)
             {
-                case TextBox or ListView or NumericUpDown:
-                    parent.BackColor = field;
-                    parent.ForeColor = green;
+                if (!DuckrSettings.Matches(new[] { entry }, name)) continue;
+                if (best == null || st > best) best = st;
+            }
+            return best;
+        }
+
+        // ---- scale / background ---------------------------------------------------------
+
+        private void ApplyScale()
+        {
+            m_scale = DeviceDpi / 96f;
+            ClientSize = new Size((int)Math.Round(W * m_scale), (int)Math.Round(H * m_scale));
+            m_background?.Dispose();
+            m_background = null;
+            m_editFont?.Dispose();
+            m_editFont = new Font("Tahoma", 11f * m_scale, FontStyle.Regular, GraphicsUnit.Pixel);
+            m_edit.Font = m_editFont;
+            if (m_editIndex >= 0) PlaceEditBox();
+            Invalidate();
+        }
+
+        private Bitmap Background()
+        {
+            if (m_background != null) return m_background;
+            var bmp = new Bitmap(Math.Max(1, ClientSize.Width), Math.Max(1, ClientSize.Height));
+            using var g = Graphics.FromImage(bmp);
+            g.ScaleTransform(m_scale, m_scale);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+            SkinPainter.Metal(g, new RectangleF(0, 0, W, H), seed: 11);
+            using (var o = new Pen(SkinColors.Outline)) g.DrawRectangle(o, 0, 0, W - 1, H - 1);
+            SkinPainter.Bevel(g, new RectangleF(1, 1, W - 2, H - 2), raised: true);
+
+            using (var tb = new LinearGradientBrush(TitleBar, Color.FromArgb(40, 42, 64), Color.FromArgb(18, 18, 30), LinearGradientMode.Vertical))
+                g.FillRectangle(tb, RectangleF.Inflate(TitleBar, -2, -2));
+            const string title = "D U C K R   ·   SETUP";
+            var ts = g.MeasureString(title, m_labelFont);
+            float tx = (W - ts.Width) / 2f;
+            SkinPainter.TitleRidges(g, 10, tx - 8, 10);
+            SkinPainter.TitleRidges(g, tx + ts.Width + 8, BtnClose.Left - 8, 10);
+            SkinPainter.DrawLabel(g, title, m_labelFont, tx, 4);
+
+            SkinPainter.Well(g, ListWell, SkinColors.ListBack);
+
+            // hotkey + attack labels and wells
+            SkinPainter.DrawLabel(g, "FORCE HOTKEY", m_labelFont, 16, SectionTop + 4);
+            DrawLcdWell(g, HotkeyBox);
+            SkinPainter.DrawLabel(g, "MUST PLAY FOR", m_labelFont, 16, AttackTop + 3);
+            var groove = AttackGroove;
+            SkinPainter.Well(g, groove, Color.FromArgb(10, 10, 16));
+            using (var tick = new Pen(Color.FromArgb(90, SkinColors.Gold), 1f))
+                for (int i = 0; i <= 10; i++)
+                {
+                    float x = groove.Left + groove.Width * i / 10f;
+                    g.DrawLine(tick, x, groove.Bottom + 3, x, groove.Bottom + (i % 5 == 0 ? 6 : 4));
+                }
+            DrawLcdWell(g, new RectangleF(ReadoutX, AttackTop + 1, ReadoutW, 17));
+
+            using (var sepD = new Pen(SkinColors.BevelDark)) g.DrawLine(sepD, 10, SectionTop - 8, W - 10, SectionTop - 8);
+            using (var sepL = new Pen(SkinColors.BevelLight)) g.DrawLine(sepL, 10, SectionTop - 7, W - 10, SectionTop - 7);
+            using (var sepD2 = new Pen(SkinColors.BevelDark)) g.DrawLine(sepD2, 10, BtnReset.Top - 10, W - 10, BtnReset.Top - 10);
+            using (var sepL2 = new Pen(SkinColors.BevelLight)) g.DrawLine(sepL2, 10, BtnReset.Top - 9, W - 10, BtnReset.Top - 9);
+
+            m_background = bmp;
+            return bmp;
+        }
+
+        private static void DrawLcdWell(Graphics g, RectangleF r)
+        {
+            SkinPainter.Well(g, r, SkinColors.LcdBack);
+            using var scan = new Pen(Color.FromArgb(14, 0, 255, 120), 1f);
+            for (float y = r.Top + 1.5f; y < r.Bottom - 1; y += 2f)
+                g.DrawLine(scan, r.Left + 1, y, r.Right - 1, y);
+        }
+
+        private static RectangleF AttackGroove => new(GrooveX1, AttackTop + 6, GrooveX2 - GrooveX1, 7);
+        private static RectangleF AttackRow => new(GrooveX1 - 6, AttackTop, GrooveX2 - GrooveX1 + 12, 20);
+
+        private static RectangleF TabRect(int i) => new(TabX0 + i * (TabW + TabGap), TabTop, TabW, TabH);
+
+        private int VisibleRows => (int)((ListWell.Height - 4) / RowH);
+
+        private RectangleF RowRect(int visibleIndex) =>
+            new(ListWell.Left + 2, ListWell.Top + 2 + visibleIndex * RowH, ListWell.Width - 4, RowH);
+
+        private static RectangleF RemoveRect(RectangleF row) => new(row.Right - 22, row.Top + 2, 16, RowH - 4);
+
+        // ---- painting -----------------------------------------------------------------------
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.DrawImageUnscaled(Background(), 0, 0);
+
+            var state = g.Save();
+            g.ScaleTransform(m_scale, m_scale);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+            DrawClose(g);
+            DrawTabs(g);
+            DrawList(g);
+            DrawHotkey(g);
+            DrawAttack(g);
+            DrawBottomButtons(g);
+            DrawSuggestions(g); // on top of everything
+
+            g.Restore(state);
+        }
+
+        private void DrawClose(Graphics g)
+        {
+            bool hot = Equals(m_hot, "close");
+            SkinPainter.DrawButton(g, BtnClose, pressed: false, hot: hot);
+            using var b = new SolidBrush(hot ? Color.White : SkinColors.Gold);
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString("x", m_tinyFont, b, new RectangleF(BtnClose.X, BtnClose.Y - 1, BtnClose.Width, BtnClose.Height), sf);
+        }
+
+        private void DrawTabs(Graphics g)
+        {
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            for (int i = 0; i < Tabs.Length; i++)
+            {
+                var (kind, title, _, led) = Tabs[i];
+                var r = TabRect(i);
+                bool active = kind == m_tab;
+                bool hot = m_hot is TabHit th && th.Kind == kind;
+                SkinPainter.DrawButton(g, r, pressed: active, hot: hot && !active);
+                SkinPainter.Led(g, r.Left + 11, r.Top + r.Height / 2, 3.2f, led, active);
+
+                int count = kind switch
+                {
+                    ListKind.Music => m_engine.Settings.MusicApps.Count,
+                    ListKind.Never => m_engine.Settings.NeverTouchApps.Count,
+                    _ => m_engine.Settings.FocusOnlyApps.Count,
+                };
+                var textRect = new RectangleF(r.Left + 18, r.Top, r.Width - 22, r.Height);
+                using var tb = new SolidBrush(active ? Color.White : SkinColors.Gold);
+                g.DrawString($"{title}  {count}", m_labelFont, tb, textRect, sf);
+            }
+
+            SkinPainter.DrawLabel(g, Tabs[(int)m_tab].Hint, m_hintFont, HintLine.Left, HintLine.Top, Color.FromArgb(214, 204, 170));
+        }
+
+        private void DrawList(Graphics g)
+        {
+            var list = CurrentList();
+            var clip = g.Clip;
+            g.SetClip(RectangleF.Inflate(ListWell, -2, -2));
+
+            int total = list.Count + 1; // + the "add" row
+            for (int vi = 0; vi < VisibleRows; vi++)
+            {
+                int i = vi + m_scroll;
+                if (i >= total) break;
+                var row = RowRect(vi);
+                bool editing = i == m_editIndex;
+                bool hotRow = m_hot is RowHit rh && rh.Index == i;
+
+                if (i == list.Count)
+                {
+                    // "+ add app" row
+                    if (!editing)
+                    {
+                        using var addBrush = new SolidBrush(hotRow ? SkinColors.ListText : Color.FromArgb(0, 150, 0));
+                        g.DrawString("+  add app...", m_listFont, addBrush, row.Left + 6, row.Top + 2);
+                    }
+                    else DrawEditRowBack(g, row, i);
+                    continue;
+                }
+
+                string entry = list[i];
+                if (editing) { DrawEditRowBack(g, row, i); continue; }
+
+                if (hotRow)
+                {
+                    using var hb = new SolidBrush(Color.FromArgb(0, 40, 0));
+                    g.FillRectangle(hb, row);
+                }
+
+                using (var tb = new SolidBrush(SkinColors.ListText))
+                {
+                    g.DrawString($"{i + 1}.", m_listFont, tb, row.Left + 4, row.Top + 2);
+                    g.DrawString(entry, m_listFont, tb, new RectangleF(row.Left + 28, row.Top + 2, 250, RowH));
+                }
+
+                // status: playing / audio / running / not running
+                var st = StatusOf(entry);
+                (string label, Color color) = st switch
+                {
+                    AppStatus.Playing => ("PLAYING", SkinColors.LcdAmber),
+                    AppStatus.Audio => ("AUDIO", SkinColors.LcdGreen),
+                    AppStatus.Running => ("RUNNING", Color.FromArgb(0, 150, 70)),
+                    _ => ("-", Color.FromArgb(0, 70, 30)),
+                };
+                if (st == AppStatus.Playing && (m_frame / 8) % 2 == 0) color = Color.FromArgb(180, color);
+                SkinPainter.Led(g, row.Right - 110, row.Top + RowH / 2, 2.6f, color, st != null);
+                m_dots.Draw(g, label, row.Right - 102, row.Top + 5, 1.3f, color);
+
+                if (entry.EndsWith('*'))
+                {
+                    using var wb = new SolidBrush(Color.FromArgb(0, 160, 0));
+                    g.DrawString("matches start", m_tinyFont, wb, row.Right - 190, row.Top + 4);
+                }
+
+                // remove button
+                var x = RemoveRect(row);
+                bool hotX = m_hot is RowHit rx && rx.Index == i && rx.Part == "x";
+                using (var xb = new SolidBrush(hotX ? Color.FromArgb(200, SkinColors.LedRed) : Color.FromArgb(40, SkinColors.LedRed)))
+                    g.FillRectangle(xb, x);
+                using (var xp = new Pen(hotX ? SkinColors.LedRed : Color.FromArgb(120, SkinColors.LedRed))) g.DrawRectangle(xp, x.X, x.Y, x.Width, x.Height);
+                using (var xt = new SolidBrush(hotX ? Color.Black : SkinColors.LedRed))
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                    g.DrawString("x", m_tinyFont, xt, x, sf);
+            }
+
+            if (total > VisibleRows)
+            {
+                using var sb = new SolidBrush(Color.FromArgb(0, 160, 0));
+                g.DrawString($"{m_scroll + 1}-{Math.Min(total, m_scroll + VisibleRows)} / {total}  (scroll)", m_tinyFont, sb,
+                    ListWell.Right - 6, ListWell.Bottom - 13, new StringFormat { Alignment = StringAlignment.Far });
+            }
+            g.Clip = clip;
+
+            string help = m_editIndex >= 0
+                ? "Type to search running apps.  Up/Down + Enter to pick.  End with * to match the start.  Esc cancels."
+                : "Click a name to edit it.  Click + add app to add one.";
+            SkinPainter.DrawLabel(g, help, m_tinyFont, HelpLine.Left, HelpLine.Top, Color.FromArgb(190, 180, 150));
+        }
+
+        private void DrawEditRowBack(Graphics g, RectangleF row, int i)
+        {
+            using var sel = new SolidBrush(SkinColors.ListSelBack);
+            g.FillRectangle(sel, row);
+            using var tb = new SolidBrush(SkinColors.ListSelText);
+            g.DrawString(i < CurrentList().Count ? $"{i + 1}." : "+", m_listFont, tb, row.Left + 4, row.Top + 2);
+            // blinking caret block at the right edge so the row reads as "typing"
+            if ((m_frame / 10) % 2 == 0)
+            {
+                using var cb = new SolidBrush(Color.FromArgb(120, 255, 255, 255));
+                g.FillRectangle(cb, row.Right - 10, row.Top + 4, 5, RowH - 8);
+            }
+        }
+
+        private void DrawSuggestions(Graphics g)
+        {
+            if (m_editIndex < 0 || m_suggestions.Count == 0) return;
+            var r = SuggestRect();
+
+            using (var shadow = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
+                g.FillRectangle(shadow, r.X + 3, r.Y + 3, r.Width, r.Height);
+            using (var bg = new SolidBrush(Color.FromArgb(6, 14, 8))) g.FillRectangle(bg, r);
+            using (var border = new Pen(SkinColors.Gold)) g.DrawRectangle(border, r.X, r.Y, r.Width, r.Height);
+
+            for (int i = 0; i < m_suggestions.Count; i++)
+            {
+                var row = new RectangleF(r.X + 1, r.Y + 1 + i * RowH, r.Width - 2, RowH);
+                bool sel = i == m_suggestSel || m_hot is SuggestHit sh && sh.Index == i;
+                if (sel)
+                {
+                    using var sb = new SolidBrush(SkinColors.ListSelBack);
+                    g.FillRectangle(sb, row);
+                }
+                var app = m_suggestions[i];
+                using (var tb = new SolidBrush(sel ? Color.White : SkinColors.ListText))
+                    g.DrawString(app.Name, m_listFont, tb, new RectangleF(row.Left + 8, row.Top + 2, row.Width - 90, RowH));
+                (string label, Color color) = app.Status switch
+                {
+                    AppStatus.Playing => ("PLAYING", SkinColors.LcdAmber),
+                    AppStatus.Audio => ("AUDIO", SkinColors.LcdGreen),
+                    _ => ("RUNNING", Color.FromArgb(0, 150, 70)),
+                };
+                m_dots.Draw(g, label, row.Right - 64, row.Top + 5, 1.3f, color);
+            }
+        }
+
+        private void DrawHotkey(Graphics g)
+        {
+            string hk = m_engine.Settings.ForceDuckHotkey;
+            if (m_capturingHotkey)
+            {
+                if ((m_frame / 8) % 2 == 0)
+                    m_dots.Draw(g, "PRESS KEYS...", HotkeyBox.Left + 8, HotkeyBox.Top + 5, 1.6f, SkinColors.LcdAmber);
+            }
+            else
+            {
+                m_dots.Draw(g, hk.Length > 0 ? hk.ToUpperInvariant() : "NONE", HotkeyBox.Left + 8, HotkeyBox.Top + 5, 1.6f,
+                    hk.Length > 0 ? SkinColors.LcdGreen : SkinColors.LcdGrey);
+            }
+            if (Equals(m_hot, "hotkey") && !m_capturingHotkey)
+            {
+                using var p = new Pen(Color.FromArgb(160, SkinColors.LcdGreen));
+                g.DrawRectangle(p, HotkeyBox.X, HotkeyBox.Y, HotkeyBox.Width, HotkeyBox.Height);
+            }
+
+            // clear button
+            bool hot = Equals(m_hot, "hkclear");
+            SkinPainter.DrawButton(g, HotkeyClear, pressed: false, hot: hot);
+            using (var b = new SolidBrush(hot ? Color.White : SkinColors.Gold))
+            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                g.DrawString("x", m_tinyFont, b, HotkeyClear, sf);
+
+            string note = m_capturingHotkey ? "Esc cancels, Backspace sets none" : "click the screen, then press the keys";
+            SkinPainter.DrawLabel(g, note, m_tinyFont, HotkeyClear.Right + 8, SectionTop + 5, Color.FromArgb(190, 180, 150));
+        }
+
+        private void DrawAttack(Graphics g)
+        {
+            int v = Math.Clamp(m_engine.Settings.AttackMs, 0, 1000);
+            float t = v / 1000f;
+            var groove = AttackGroove;
+            var fill = new RectangleF(groove.Left + 1, groove.Top + 1, (groove.Width - 2) * t, groove.Height - 2);
+            if (fill.Width > 0.5f)
+            {
+                using var fb = new LinearGradientBrush(new RectangleF(groove.Left, groove.Top, groove.Width, groove.Height),
+                    Color.FromArgb(0, 170, 70), Color.FromArgb(230, 200, 40), LinearGradientMode.Horizontal);
+                g.FillRectangle(fb, fill);
+            }
+            float tx = groove.Left + groove.Width * t;
+            var thumb = new RectangleF(tx - 7, groove.Top - 4, 14, groove.Height + 8);
+            SkinPainter.DrawButton(g, thumb, pressed: false, hot: Equals(m_hot, "attack") || m_draggingAttack);
+            using (var grip = new Pen(Color.FromArgb(150, SkinColors.BevelDark)))
+                for (int i = -2; i <= 2; i += 2) g.DrawLine(grip, tx + i, thumb.Top + 4, tx + i, thumb.Bottom - 4);
+
+            m_dots.Draw(g, $"{v}ms", ReadoutX + 6, AttackTop + 5, 1.5f, SkinColors.LcdGreen);
+            SkinPainter.DrawLabel(g, "before lowering (ignores clicks and UI sounds)", m_tinyFont, GrooveX1, AttackTop + 22,
+                Color.FromArgb(190, 180, 150));
+        }
+
+        private void DrawBottomButtons(Graphics g)
+        {
+            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            foreach (var (r, text, id) in new[] { (BtnReset, "RESET LIST", "reset"), (BtnDone, "DONE", "done") })
+            {
+                bool hot = Equals(m_hot, id);
+                SkinPainter.DrawButton(g, r, pressed: false, hot: hot);
+                using var tb = new SolidBrush(hot ? Color.White : SkinColors.Gold);
+                g.DrawString(text, m_labelFont, tb, r, sf);
+            }
+        }
+
+        // ---- editing -------------------------------------------------------------------------
+
+        private void BeginEdit(int index)
+        {
+            var list = CurrentList();
+            m_editIndex = index;
+            m_edit.Text = index < list.Count ? list[index] : "";
+            EnsureRowVisible(index);
+            PlaceEditBox();
+            m_edit.Visible = true;
+            m_edit.Focus();
+            m_edit.SelectAll();
+            RefreshRunning();
+            UpdateSuggestions();
+            Invalidate();
+        }
+
+        private void PlaceEditBox()
+        {
+            int vi = m_editIndex - m_scroll;
+            var row = RowRect(Math.Max(0, vi));
+            var r = new RectangleF(row.Left + 28, row.Top + 3, 300, RowH - 5);
+            m_edit.Bounds = Rectangle.Round(new RectangleF(r.X * m_scale, r.Y * m_scale, r.Width * m_scale, r.Height * m_scale));
+        }
+
+        private void EnsureRowVisible(int index)
+        {
+            if (index < m_scroll) m_scroll = index;
+            else if (index >= m_scroll + VisibleRows) m_scroll = index - VisibleRows + 1;
+        }
+
+        private void EndEdit()
+        {
+            m_editIndex = -1;
+            m_suggestions.Clear();
+            m_suggestSel = -1;
+            m_edit.Visible = false;
+            Focus();
+            Invalidate();
+        }
+
+        private void CommitEdit(string text)
+        {
+            if (m_editIndex < 0) return;
+            var list = CurrentList();
+            string name = text.Trim();
+            if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) name = name[..^4].Trim();
+
+            bool duplicate = list.Where((e, i) => i != m_editIndex)
+                                 .Any(e => e.Trim().Equals(name, StringComparison.OrdinalIgnoreCase));
+
+            if (m_editIndex < list.Count)
+            {
+                if (name.Length == 0 || duplicate) list.RemoveAt(m_editIndex);
+                else list[m_editIndex] = name;
+            }
+            else if (name.Length > 0 && !duplicate)
+            {
+                list.Add(name);
+            }
+            m_engine.SaveSettingsSoon();
+            EndEdit();
+        }
+
+        private void UpdateSuggestions()
+        {
+            if (m_editIndex < 0) return;
+            string q = m_edit.Text.Trim().TrimEnd('*');
+            var list = CurrentList();
+
+            m_suggestions.Clear();
+            m_suggestions.AddRange(m_running
+                .Where(kv => q.Length == 0 || kv.Key.Contains(q, StringComparison.OrdinalIgnoreCase))
+                .Where(kv => !list.Any(e => e.Equals(kv.Key, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => q.Length > 0 && !kv.Key.StartsWith(q, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Take(6)
+                .Select(kv => new RunningApp(kv.Key, kv.Value)));
+            m_suggestSel = m_suggestions.Count > 0 && q.Length > 0 ? 0 : -1;
+            Invalidate();
+        }
+
+        private RectangleF SuggestRect()
+        {
+            int vi = Math.Max(0, m_editIndex - m_scroll);
+            var row = RowRect(vi);
+            float h = m_suggestions.Count * RowH + 2;
+            float y = row.Bottom + 1;
+            if (y + h > H - 6) y = row.Top - h - 1; // not enough room below: open upward
+            return new RectangleF(row.Left + 22, y, 300, h);
+        }
+
+        private void EditKeyDown(object? sender, KeyEventArgs e)
+        {
+            switch (e.KeyCode)
+            {
+                case Keys.Enter:
+                    CommitEdit(m_suggestSel >= 0 && m_suggestSel < m_suggestions.Count ? m_suggestions[m_suggestSel].Name : m_edit.Text);
+                    e.SuppressKeyPress = true;
                     break;
-                case Button b:
-                    b.FlatStyle = FlatStyle.Flat;
-                    b.FlatAppearance.BorderColor = Color.FromArgb(128, 134, 168);
-                    b.BackColor = Color.FromArgb(70, 74, 98);
-                    b.ForeColor = gold;
+                case Keys.Escape:
+                    EndEdit();
+                    e.SuppressKeyPress = true;
                     break;
-                case TrackBar:
-                    parent.BackColor = back;
+                case Keys.Down:
+                    if (m_suggestions.Count > 0) m_suggestSel = Math.Min(m_suggestions.Count - 1, m_suggestSel + 1);
+                    Invalidate();
+                    e.SuppressKeyPress = true;
                     break;
-                case Label l when l.ForeColor == SystemColors.GrayText:
-                    l.BackColor = back;
-                    l.ForeColor = hint;
+                case Keys.Up:
+                    if (m_suggestions.Count > 0) m_suggestSel = Math.Max(-1, m_suggestSel - 1);
+                    Invalidate();
+                    e.SuppressKeyPress = true;
                     break;
-                default:
-                    parent.BackColor = back;
-                    parent.ForeColor = gold;
+                case Keys.Tab:
+                    if (m_suggestSel >= 0 && m_suggestSel < m_suggestions.Count)
+                    {
+                        m_edit.Text = m_suggestions[m_suggestSel].Name;
+                        m_edit.SelectionStart = m_edit.Text.Length;
+                    }
+                    e.SuppressKeyPress = true;
                     break;
             }
-            foreach (Control c in parent.Controls) ApplyDark(c);
+        }
+
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            // keep Tab inside the edit box (it accepts the suggestion)
+            if (m_editIndex >= 0 && (keyData & Keys.KeyCode) == Keys.Tab) return true;
+            return base.ProcessDialogKey(keyData);
+        }
+
+        // ---- hotkey capture ----------------------------------------------------------------
+
+        private void BeginHotkeyCapture()
+        {
+            if (m_editIndex >= 0) CommitEdit(m_edit.Text);
+            m_capturingHotkey = true;
+            m_engine.SuspendHotkey(); // otherwise Windows eats the current hotkey before we see it
+            Focus();
+            Invalidate();
+        }
+
+        private void EndHotkeyCapture(string? newHotkey)
+        {
+            if (newHotkey != null)
+            {
+                m_engine.Settings.ForceDuckHotkey = newHotkey;
+                m_engine.SaveSettingsSoon();
+            }
+            m_capturingHotkey = false;
+            m_engine.ResumeHotkey();
+            Invalidate();
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (m_capturingHotkey)
+            {
+                e.Handled = e.SuppressKeyPress = true;
+                switch (e.KeyCode)
+                {
+                    case Keys.Escape: EndHotkeyCapture(null); return;
+                    case Keys.Back:
+                    case Keys.Delete: EndHotkeyCapture(""); return;
+                    case Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LWin or Keys.RWin: return; // wait for the real key
+                }
+                var parts = new List<string>();
+                if (e.Control) parts.Add("Ctrl");
+                if (e.Alt) parts.Add("Alt");
+                if (e.Shift) parts.Add("Shift");
+                if (parts.Count == 0) return; // needs at least one modifier
+                parts.Add(KeyName(e.KeyCode));
+                string text = string.Join("+", parts);
+                if (HotkeyWindow.TryParse(text, out _, out _)) EndHotkeyCapture(text);
+                return;
+            }
+            if (m_editIndex < 0 && e.KeyCode == Keys.Escape) Close();
+        }
+
+        private static string KeyName(Keys k) =>
+            k is >= Keys.D0 and <= Keys.D9 ? ((char)('0' + (k - Keys.D0))).ToString() : k.ToString();
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Alt combos would otherwise open the (invisible) system menu
+            if (m_capturingHotkey)
+            {
+                OnKeyDown(new KeyEventArgs(keyData));
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        // ---- mouse -------------------------------------------------------------------------
+
+        private PointF Logical(Point p) => new(p.X / m_scale, p.Y / m_scale);
+
+        private object? HitTest(PointF p)
+        {
+            if (m_editIndex >= 0 && m_suggestions.Count > 0)
+            {
+                var sr = SuggestRect();
+                if (sr.Contains(p))
+                {
+                    int i = (int)((p.Y - sr.Top - 1) / RowH);
+                    return i >= 0 && i < m_suggestions.Count ? new SuggestHit(i) : null;
+                }
+            }
+            if (BtnClose.Contains(p)) return "close";
+            for (int i = 0; i < Tabs.Length; i++) if (TabRect(i).Contains(p)) return new TabHit(Tabs[i].Kind);
+
+            var inner = RectangleF.Inflate(ListWell, -2, -2);
+            if (inner.Contains(p))
+            {
+                int vi = (int)((p.Y - inner.Top) / RowH);
+                int idx = vi + m_scroll;
+                var list = CurrentList();
+                if (vi < VisibleRows && idx <= list.Count)
+                {
+                    if (idx == list.Count) return new RowHit(idx, "add");
+                    return new RowHit(idx, RemoveRect(RowRect(vi)).Contains(p) ? "x" : "name");
+                }
+                return null;
+            }
+            if (HotkeyBox.Contains(p)) return "hotkey";
+            if (HotkeyClear.Contains(p)) return "hkclear";
+            if (AttackRow.Contains(p)) return "attack";
+            if (BtnReset.Contains(p)) return "reset";
+            if (BtnDone.Contains(p)) return "done";
+            if (TitleBar.Contains(p)) return "title";
+            return null;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            var p = Logical(e.Location);
+            if (m_draggingAttack) { SetAttackFromX(p.X); return; }
+            var hot = HitTest(p);
+            if (!Equals(hot, m_hot))
+            {
+                m_hot = hot;
+                Cursor = hot is null or "title" ? Cursors.Default : Cursors.Hand;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (!m_draggingAttack) { m_hot = null; Invalidate(); }
+        }
+
+        [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+        [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            var p = Logical(e.Location);
+            var hit = HitTest(p);
+
+            // clicking anywhere while typing: a suggestion picks it, anything else keeps what was typed
+            if (m_editIndex >= 0)
+            {
+                if (hit is SuggestHit sh) { CommitEdit(m_suggestions[sh.Index].Name); return; }
+                CommitEdit(m_edit.Text);
+                hit = HitTest(p); // rows may have moved
+            }
+            if (m_capturingHotkey && !Equals(hit, "hotkey")) EndHotkeyCapture(null);
+
+            switch (hit)
+            {
+                case "title":
+                    ReleaseCapture();
+                    SendMessage(Handle, 0xA1 /* WM_NCLBUTTONDOWN */, (IntPtr)2 /* HTCAPTION */, IntPtr.Zero);
+                    break;
+                case "attack":
+                    m_draggingAttack = true;
+                    Capture = true;
+                    SetAttackFromX(p.X);
+                    break;
+            }
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (m_draggingAttack)
+            {
+                m_draggingAttack = false;
+                Capture = false;
+                m_engine.SaveSettingsSoon();
+                return;
+            }
+            if (e.Button != MouseButtons.Left) return;
+            var hit = HitTest(Logical(e.Location));
+            switch (hit)
+            {
+                case "close":
+                case "done":
+                    Close();
+                    break;
+                case TabHit th:
+                    if (m_tab != th.Kind) { m_tab = th.Kind; m_scroll = 0; }
+                    Invalidate();
+                    break;
+                case RowHit { Part: "x" } rx:
+                    CurrentList().RemoveAt(rx.Index);
+                    m_engine.SaveSettingsSoon();
+                    Invalidate();
+                    break;
+                case RowHit rh:
+                    BeginEdit(rh.Index);
+                    break;
+                case "hotkey":
+                    if (!m_capturingHotkey) BeginHotkeyCapture();
+                    break;
+                case "hkclear":
+                    m_engine.Settings.ForceDuckHotkey = "";
+                    m_engine.SaveSettingsSoon();
+                    m_engine.ResumeHotkey();
+                    Invalidate();
+                    break;
+                case "reset":
+                    var list = CurrentList();
+                    list.Clear();
+                    list.AddRange(DefaultList(m_tab));
+                    m_scroll = 0;
+                    m_engine.SaveSettingsSoon();
+                    Invalidate();
+                    break;
+            }
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            var p = Logical(e.Location);
+            if (AttackRow.Contains(p))
+            {
+                var s = m_engine.Settings;
+                s.AttackMs = Math.Clamp(s.AttackMs + Math.Sign(e.Delta) * 10, 0, 1000);
+                m_engine.SaveSettingsSoon();
+                Invalidate();
+                return;
+            }
+            if (ListWell.Contains(p) && m_editIndex < 0)
+            {
+                int total = CurrentList().Count + 1;
+                m_scroll = Math.Clamp(m_scroll - Math.Sign(e.Delta), 0, Math.Max(0, total - VisibleRows));
+                Invalidate();
+            }
+        }
+
+        private void SetAttackFromX(float x)
+        {
+            float t = Math.Clamp((x - GrooveX1) / (GrooveX2 - GrooveX1), 0, 1);
+            int v = (int)Math.Round(t * 100) * 10;
+            if (m_engine.Settings.AttackMs != v)
+            {
+                m_engine.Settings.AttackMs = v;
+                Invalidate();
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (m_editIndex >= 0) CommitEdit(m_edit.Text);
+            if (m_capturingHotkey) EndHotkeyCapture(null);
+            base.OnFormClosing(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                m_anim.Dispose();
+                m_background?.Dispose();
+                m_dots.Dispose();
+                m_labelFont.Dispose();
+                m_tinyFont.Dispose();
+                m_listFont.Dispose();
+                m_hintFont.Dispose();
+                m_editFont?.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 }

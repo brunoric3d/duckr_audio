@@ -151,7 +151,25 @@ namespace Duckr
             DuckrLog.Write("[+] Duckr stopped, volumes restored");
         }
 
-        /// <summary>Swap in new settings (from the settings window) without losing state.</summary>
+        private bool m_hotkeySuspended;
+
+        /// <summary>Let go of the global hotkey (while the setup window records a new one).</summary>
+        public void SuspendHotkey()
+        {
+            m_hotkeySuspended = true;
+            m_hotkey?.Dispose();
+            m_hotkey = null;
+        }
+
+        /// <summary>Register the hotkey again, from the current settings.</summary>
+        public void ResumeHotkey()
+        {
+            m_hotkeySuspended = false;
+            m_hotkeyFailLogged = false;
+            if (IsRunning) RegisterHotkey();
+        }
+
+        /// <summary>Swap in new settings without losing state.</summary>
         public void ApplySettings(DuckrSettings settings)
         {
             bool wasRunning = IsRunning;
@@ -198,7 +216,7 @@ namespace Duckr
                 {
                     m_lastConflictCheckMs = now;
                     CheckConflicts();
-                    if (m_hotkey == null && m_settings.ForceDuckHotkey.Length > 0)
+                    if (m_hotkey == null && !m_hotkeySuspended && m_settings.ForceDuckHotkey.Length > 0)
                         RegisterHotkey(); // retry: the app holding it may have closed
                 }
 

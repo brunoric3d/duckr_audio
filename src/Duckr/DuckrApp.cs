@@ -120,16 +120,17 @@ namespace Duckr
                 m_setup.Activate();
                 return;
             }
-            m_setup = new SetupForm(m_engine, dark: true);
-            m_setup.SettingsSaved += (_, s) =>
+            m_setup = new SetupForm(m_engine);
+            m_setup.FormClosed += (_, _) => { m_setup = null; UpdateTray(); };
+            // open next to the main window when it's showing
+            if (m_skin != null && !m_skin.IsDisposed && m_skin.Visible)
             {
-                bool wasOn = IsOn;
-                m_engine.ApplySettings(s);
-                if (s.Enabled != wasOn)
-                    SetOn(s.Enabled, save: false);
-                UpdateTray();
-            };
-            m_setup.FormClosed += (_, _) => m_setup = null;
+                var screen = Screen.FromControl(m_skin).WorkingArea;
+                int x = m_skin.Right + 8;
+                if (x + m_setup.Width > screen.Right) x = Math.Max(screen.Left, m_skin.Left - m_setup.Width - 8);
+                m_setup.StartPosition = FormStartPosition.Manual;
+                m_setup.Location = new Point(x, Math.Max(screen.Top, m_skin.Top));
+            }
             m_setup.Show();
         }
 

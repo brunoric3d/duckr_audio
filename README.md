@@ -25,6 +25,17 @@ Duckr is a small Windows tray app for people who edit video or make music while 
   - **N** Never touch: never lowered and never triggers (calls, OBS).
   - **F** Lower while focused: for DAWs on **ASIO** drivers, which skip the Windows mixer so no app can hear them. These lower everything else the whole time they're focused.
 
+## Setup
+
+Same skin as the main window. Three tabs (MUSIC APPS, NEVER TOUCH, WHILE FOCUSED), each a list of rows:
+
+- Click a name to edit it, or **+ add app** to add one. Typing searches the apps running right now (ones playing sound first); pick with Up/Down + Enter or a click. End a name with `*` to match anything that starts with it.
+- Each row shows if that app is PLAYING, has AUDIO, is RUNNING, or isn't open. **x** removes it.
+- **Force hotkey**: click the screen and press the keys you want. Backspace sets none.
+- **Must play for**: how long sound must last before lowering starts.
+
+Changes apply at once and save themselves.
+
 Closing the window keeps Duckr in the tray. Use the tray menu to exit.
 
 ## Known limits
