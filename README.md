@@ -1,5 +1,7 @@
 # Duckr
 
+[Download the latest installer](https://github.com/brunoric3d/duckr/releases/latest)
+
 **Your music steps back when your work plays.**
 
 Duckr is a small Windows tray app for people who edit video or make music while listening to music. When the app you're working in starts playing sound (Premiere, After Effects, Resolve, a DAW, a video player), every other app fades down. When playback stops, they fade back up. No more reaching for the volume every time you hit play.
@@ -64,6 +66,15 @@ Double-click `make-installer.bat`. It installs the Velopack packaging tool (`vpk
 The installer is one click: it shows the Duckr splash, installs per user to `%LocalAppData%\Duckr` (no admin needed), adds Start menu and desktop shortcuts and opens Duckr. Uninstall from Windows Settings > Apps; that also removes "start with Windows".
 
 For a new release, bump `VERSION` in `make-installer.bat` and `<Version>` in `src\Duckr\Duckr.csproj`.
+
+### Releases on GitHub
+
+Push a version tag and GitHub Actions builds, tests, makes the installer and publishes a release with `Duckr-win-Setup.exe` attached:
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## License and credits
 
