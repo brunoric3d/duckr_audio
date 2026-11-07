@@ -50,6 +50,26 @@ namespace Duckr
             public float LastSet;
         }
 
+        /// <summary>Sessions just restored: instance id -> volume they must keep for VerifyMs.</summary>
+        private readonly Dictionary<string, Verify> m_verify = new();
+
+        private sealed class Verify
+        {
+            public float Original;
+            public long UntilMs;
+        }
+
+        private const long VerifyMs = 1500;
+        private long m_nowMs;
+
+        // other tools that also change app volumes and would fight with Duckr
+        private static readonly string[] ConflictingProcesses = { "WinBGMuter" };
+        private long m_lastConflictCheckMs = NeverMs;
+        private bool m_hotkeyFailLogged;
+
+        /// <summary>Non-empty when another volume tool is running (shown on the skin).</summary>
+        public string ConflictWarning { get; private set; } = "";
+
         public DuckEngine(DuckrSettings settings)
         {
             m_settings = settings;
@@ -183,8 +203,17 @@ namespace Duckr
             long now = m_clock.ElapsedMilliseconds;
             try
             {
+                m_nowMs = now;
                 m_tickCount++;
                 if (m_tickCount <= 2) DebugLog.Write($"tick {m_tickCount}: start");
+
+                if (now - m_lastConflictCheckMs >= 5000)
+                {
+                    m_lastConflictCheckMs = now;
+                    CheckConflicts();
+                    if (m_hotkey == null && m_settings.ForceDuckHotkey.Length > 0)
+                        RegisterHotkey(); // retry: the app holding it may have closed
+                }
 
                 if (now - m_lastRescanMs >= RescanMs)
                 {
@@ -262,10 +291,32 @@ namespace Duckr
                     if (t != null)
                     {
                         s.SetVolume(t.Original);
+                        // double check for a moment: if something pushes it back down, set it again
+                        m_verify[s.InstanceId] = new Verify { Original = t.Original, UntilMs = m_nowMs + VerifyMs };
                         m_tracked.Remove(s.InstanceId);
                         journalDirty = true;
                     }
+                    else if (m_verify.TryGetValue(s.InstanceId, out var v))
+                    {
+                        if (m_nowMs > v.UntilMs)
+                        {
+                            m_verify.Remove(s.InstanceId);
+                            journalDirty = true;
+                        }
+                        else if (s.Volume is float cur && cur < v.Original - 0.02f && s.SetVolume(v.Original))
+                        {
+                            DuckrLog.Write($"[+] Duckr: volume of {s.ProcessName} was {cur:0.00} after restore, set back to {v.Original:0.00}");
+                        }
+                    }
                     continue;
+                }
+
+                // ducking again before the double check ended: the verified value is the real one
+                if (t == null && m_verify.Remove(s.InstanceId, out var pending))
+                {
+                    t = new Tracked { Original = pending.Original, LastSet = s.Volume ?? pending.Original };
+                    m_tracked[s.InstanceId] = t;
+                    journalDirty = true;
                 }
 
                 float? current = s.Volume;
@@ -278,12 +329,9 @@ namespace Duckr
                     m_tracked[s.InstanceId] = t;
                     journalDirty = true;
                 }
-                else if (Math.Abs(current.Value - t.LastSet) > 0.01f && gain > 0.05f)
-                {
-                    // user moved this app's slider while ducked: treat it as the new normal
-                    t.Original = Math.Clamp(current.Value / gain, 0f, 1f);
-                    journalDirty = true;
-                }
+                // Original is never changed while ducked. (An older version guessed "the user
+                // moved the slider" from unexpected values; with another volume tool running
+                // that guess saved lower and lower volumes as "normal".)
 
                 float wanted = t.Original * gain;
                 if (Math.Abs(wanted - t.LastSet) > 0.001f)
@@ -301,29 +349,50 @@ namespace Duckr
         {
             var alive = new HashSet<string>(m_scanner.Sessions.Select(s => s.InstanceId));
             var gone = m_tracked.Keys.Where(k => !alive.Contains(k)).ToList();
-            if (gone.Count == 0) return;
+            var goneVerify = m_verify.Keys.Where(k => !alive.Contains(k)).ToList();
+            if (gone.Count == 0 && goneVerify.Count == 0) return;
             foreach (var k in gone) m_tracked.Remove(k);
+            foreach (var k in goneVerify) m_verify.Remove(k);
             WriteJournal();
         }
 
         private void RestoreAll()
         {
-            if (m_tracked.Count > 0)
+            var pending = m_tracked.ToDictionary(kv => kv.Key, kv => kv.Value.Original);
+            foreach (var kv in m_verify) pending.TryAdd(kv.Key, kv.Value.Original);
+
+            // set every volume back, then read it back; retry what didn't stick
+            for (int attempt = 0; attempt < 4 && pending.Count > 0; attempt++)
             {
                 try
                 {
+                    if (attempt > 0) Thread.Sleep(80);
                     m_scanner.Rescan();
+                    var alive = new HashSet<string>();
                     foreach (var s in m_scanner.Sessions)
-                        if (m_tracked.TryGetValue(s.InstanceId, out var t))
-                            s.SetVolume(t.Original);
+                    {
+                        if (!pending.TryGetValue(s.InstanceId, out float original)) continue;
+                        alive.Add(s.InstanceId);
+                        s.SetVolume(original);
+                        if (s.Volume is float now && Math.Abs(now - original) <= 0.01f)
+                            pending.Remove(s.InstanceId);
+                    }
+                    // sessions that are gone (app closed) can't be restored and don't need it
+                    foreach (var k in pending.Keys.Where(k => !alive.Contains(k)).ToList())
+                        pending.Remove(k);
                 }
                 catch (Exception ex)
                 {
                     DuckrLog.Write($"[!] Duckr restore error: {ex.Message}");
                 }
-                m_tracked.Clear();
             }
-            WriteJournal();
+            if (pending.Count > 0)
+                DuckrLog.Write($"[!] Duckr could not confirm {pending.Count} restored volume(s); the safety file keeps them for next start");
+
+            m_tracked.Clear();
+            m_verify.Clear();
+            if (pending.Count > 0) WriteJournal(pending);
+            else WriteJournal();
         }
 
         private void SetState(DuckState state)
@@ -339,17 +408,19 @@ namespace Duckr
 
         private static string JournalPath => Path.Combine(DuckrSettings.DefaultFolder, "ducked-volumes.json");
 
-        private void WriteJournal()
+        private void WriteJournal(Dictionary<string, float>? explicitData = null)
         {
             try
             {
-                if (m_tracked.Count == 0)
+                var data = explicitData ?? m_tracked.ToDictionary(kv => kv.Key, kv => kv.Value.Original);
+                if (explicitData == null)
+                    foreach (var kv in m_verify) data.TryAdd(kv.Key, kv.Value.Original);
+                if (data.Count == 0)
                 {
                     if (File.Exists(JournalPath)) File.Delete(JournalPath);
                     return;
                 }
                 Directory.CreateDirectory(DuckrSettings.DefaultFolder);
-                var data = m_tracked.ToDictionary(kv => kv.Key, kv => kv.Value.Original);
                 File.WriteAllText(JournalPath, JsonSerializer.Serialize(data));
             }
             catch (Exception ex)
@@ -392,9 +463,35 @@ namespace Duckr
             m_hotkey = new HotkeyWindow(() => ForceDuck = !ForceDuck);
             if (!m_hotkey.Register(mods, vk))
             {
-                DuckrLog.Write($"[!] Duckr: hotkey {m_settings.ForceDuckHotkey} is taken by another app");
+                if (!m_hotkeyFailLogged)
+                    DuckrLog.Write($"[!] Duckr: hotkey {m_settings.ForceDuckHotkey} is taken by another app (will keep trying)");
+                m_hotkeyFailLogged = true;
                 m_hotkey.Dispose();
                 m_hotkey = null;
+            }
+            else if (m_hotkeyFailLogged)
+            {
+                DuckrLog.Write($"[+] Duckr: hotkey {m_settings.ForceDuckHotkey} is now active");
+                m_hotkeyFailLogged = false;
+            }
+        }
+
+        private void CheckConflicts()
+        {
+            string found = "";
+            foreach (var name in ConflictingProcesses)
+            {
+                var procs = Process.GetProcessesByName(name);
+                foreach (var p in procs) p.Dispose();
+                if (procs.Length > 0) { found = name; break; }
+            }
+            string warning = found.Length == 0 ? ""
+                : found == "WinBGMuter" ? "BACKGROUND MUTER IS RUNNING - CLOSE IT, IT FIGHTS DUCKR OVER VOLUMES"
+                : $"{found.ToUpperInvariant()} IS RUNNING - IT MAY FIGHT DUCKR OVER VOLUMES";
+            if (warning != ConflictWarning)
+            {
+                ConflictWarning = warning;
+                DuckrLog.Write(warning.Length > 0 ? $"[!] {warning}" : "[+] Conflicting volume tool closed");
             }
         }
 

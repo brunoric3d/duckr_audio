@@ -394,9 +394,15 @@ namespace Duckr.Skin
                 marquee = $"FOCUS: {focus}  ***  LEVEL {lvl}  ***  OTHERS AT {others}" +
                           (hk.Length > 0 ? $"  ***  {hk.ToUpperInvariant()} = FORCE" : "") + "  ***  ";
             }
+            var marqueeColor = on ? SkinColors.LcdGreen : SkinColors.LcdGrey;
+            if (on && m_engine.ConflictWarning.Length > 0)
+            {
+                marquee = $"WARNING: {m_engine.ConflictWarning}  ***  ";
+                marqueeColor = SkinColors.LcdRed;
+            }
             const float pitch = 2f;
             int cols = (int)((r.Width - 16) / pitch);
-            m_smallDots.Draw(g, marquee, r.Left + 8, r.Top + 44, pitch, on ? SkinColors.LcdGreen : SkinColors.LcdGrey,
+            m_smallDots.Draw(g, marquee, r.Left + 8, r.Top + 44, pitch, marqueeColor,
                 maxCols: cols, offsetCols: m_marqueeOffset, wrap: true);
 
             // bottom: segmented bar of the other apps' volume
