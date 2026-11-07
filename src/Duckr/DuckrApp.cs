@@ -157,6 +157,7 @@ namespace Duckr
                 : m_engine.ForceDuck ? "Duckr: forced (hotkey)"
                 : m_engine.State switch
                 {
+                    DuckState.Ducking when m_engine.ByVoice => $"Duckr: {m_engine.VoiceApp} is talking",
                     DuckState.Ducking => "Duckr: lowering other apps",
                     DuckState.Holding => "Duckr: holding",
                     DuckState.Restoring => "Duckr: restoring",

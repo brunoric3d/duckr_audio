@@ -79,6 +79,15 @@ namespace Duckr
         /// <summary>Loudest peak (0..1) of the focused app on the last tick.</summary>
         public float FocusedPeak { get; private set; }
 
+        /// <summary>True when ducking is (or was last) caused by a VOICE app talking.</summary>
+        public bool ByVoice => m_controller.ByVoice;
+
+        /// <summary>The VOICE app that last talked.</summary>
+        public string VoiceApp { get; private set; } = "";
+
+        private bool IsVoiceApp(string name) =>
+            DuckrSettings.Matches(m_settings.VoiceApps, name) && DuckrSettings.Matches(m_settings.NeverTouchApps, name);
+
         /// <summary>Gain applied to other apps right now (1 = untouched).</summary>
         public float CurrentGain => m_controller.Gain;
 
@@ -238,6 +247,17 @@ namespace Duckr
 
                 bool ignored = focused.Length == 0 || DuckrSettings.Matches(m_settings.NeverTouchApps, focused);
 
+                // VOICE apps: never-touch apps marked VOICE (calls) duck music when they talk
+                float voicePeak = 0f;
+                string voiceApp = "";
+                foreach (var s in m_scanner.Sessions)
+                {
+                    if (s.IsSystemSounds || !IsVoiceApp(s.ProcessName)) continue;
+                    float pk = s.Peak;
+                    if (pk > voicePeak) { voicePeak = pk; voiceApp = s.ProcessName; }
+                }
+                if (voicePeak >= m_settings.ThresholdLinear) VoiceApp = voiceApp;
+
                 float peak = 0f;
                 if (!ignored)
                 {
@@ -254,6 +274,7 @@ namespace Duckr
                     FocusedIsIgnored = ignored,
                     ForceDuck = m_forceDuck,
                     FocusKey = focused,
+                    VoicePeak = voicePeak,
                 });
 
                 FocusedPeak = peak;

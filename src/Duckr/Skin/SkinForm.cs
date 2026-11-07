@@ -366,6 +366,7 @@ namespace Duckr.Skin
                 : m_engine.ForceDuck ? ("FORCED", SkinColors.LcdRed)
                 : m_engine.State switch
                 {
+                    DuckState.Ducking when m_engine.ByVoice => ("VOICE", SkinColors.LcdCyan),
                     DuckState.Ducking => ("DUCKING", SkinColors.LcdAmber),
                     DuckState.Holding => ("HOLD", SkinColors.LcdCyan),
                     DuckState.Restoring => ("RESTORE", SkinColors.LcdGreen),
@@ -399,7 +400,8 @@ namespace Duckr.Skin
                 string focus = m_engine.FocusedApp.Length > 0 ? m_engine.FocusedApp : "(desktop)";
                 string lvl = m_engine.FocusedPeak > 0 ? $"{20 * Math.Log10(m_engine.FocusedPeak):0} dB" : "silent";
                 string hk = m_engine.Settings.ForceDuckHotkey;
-                marquee = $"FOCUS: {focus}  ***  LEVEL {lvl}  ***  OTHERS AT {others}" +
+                marquee = (m_engine.ByVoice && m_engine.State != DuckState.Idle ? $"VOICE: {m_engine.VoiceApp} TALKING  ***  " : "") +
+                          $"FOCUS: {focus}  ***  LEVEL {lvl}  ***  OTHERS AT {others}" +
                           (hk.Length > 0 ? $"  ***  {hk.ToUpperInvariant()} = FORCE" : "") + "  ***  ";
             }
             var marqueeColor = on ? SkinColors.LcdGreen : SkinColors.LcdGrey;
@@ -725,6 +727,8 @@ namespace Duckr.Skin
             var list = letter switch { "M" => s.MusicApps, "N" => s.NeverTouchApps, _ => s.FocusOnlyApps };
             if (DuckrSettings.Matches(list, app))
             {
+                if (letter == "N")
+                    s.VoiceApps.RemoveAll(v => v.Trim().Equals(app, StringComparison.OrdinalIgnoreCase));
                 // remove exact entries and wildcard entries that match this app
                 list.RemoveAll(entry =>
                 {

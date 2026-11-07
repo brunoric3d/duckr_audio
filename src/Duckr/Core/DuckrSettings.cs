@@ -66,6 +66,15 @@ namespace Duckr
         };
 
         /// <summary>
+        /// Never-touch apps whose sound lowers the music even when they are not
+        /// focused: a friend talking on a call. Per app, toggled in Setup.
+        /// </summary>
+        public List<string> VoiceApps { get; set; } = new()
+        {
+            "Discord", "Teams", "ms-teams", "Zoom", "Slack",
+        };
+
+        /// <summary>
         /// Apps that duck others just by being focused, no sound needed. For DAWs
         /// that use ASIO drivers, which Windows can't hear. Empty by default because
         /// it also ducks while you're not playing anything.
@@ -160,6 +169,7 @@ namespace Duckr
             ThresholdDb = Math.Clamp(ThresholdDb, -90, 0);
             MusicApps ??= new();
             NeverTouchApps ??= new();
+            VoiceApps ??= new();
             FocusOnlyApps ??= new();
             ForceDuckHotkey ??= "";
             return this;

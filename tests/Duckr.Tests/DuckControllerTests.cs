@@ -18,11 +18,11 @@ namespace Duckr.Tests
 
         /// <summary>Feed one sample every 30 ms for <paramref name="ms"/> milliseconds.</summary>
         private static float Run(DuckController c, ref long t, long ms, float peak,
-            bool focusOnly = false, bool ignored = false, bool force = false, string app = "Premiere")
+            bool focusOnly = false, bool ignored = false, bool force = false, string app = "Premiere", float voice = 0f)
         {
             float g = c.Gain;
             for (long end = t + ms; t < end; t += 30)
-                g = c.Update(new DuckInput { NowMs = t, FocusedPeak = peak, FocusedIsFocusOnly = focusOnly, FocusedIsIgnored = ignored, ForceDuck = force, FocusKey = app });
+                g = c.Update(new DuckInput { NowMs = t, FocusedPeak = peak, FocusedIsFocusOnly = focusOnly, FocusedIsIgnored = ignored, ForceDuck = force, FocusKey = app, VoicePeak = voice });
             return g;
         }
 
@@ -156,6 +156,49 @@ namespace Duckr.Tests
             var c = Fresh(Cfg(), out long t);
             Run(c, ref t, 400, 0f, force: true, app: "Premiere");
             Assert.Equal(0.15f, Run(c, ref t, 400, 0f, force: true, app: "Explorer"), 3);
+        }
+
+        [Fact]
+        public void Voice_app_talking_in_background_ducks()
+        {
+            // you're in Premiere, silent; a friend talks on Discord
+            var c = Fresh(Cfg(), out long t);
+            Assert.Equal(0.15f, Run(c, ref t, 600, 0f, voice: Loud), 3);
+            Assert.True(c.ByVoice);
+        }
+
+        [Fact]
+        public void Voice_ping_shorter_than_attack_does_not_duck()
+        {
+            var c = Fresh(Cfg(), out long t);
+            Run(c, ref t, 60, 0f, voice: Loud);
+            Assert.Equal(1f, Run(c, ref t, 1000, 0f));
+        }
+
+        [Fact]
+        public void Voice_holds_between_words_then_restores()
+        {
+            var c = Fresh(Cfg(), out long t);
+            Run(c, ref t, 600, 0f, voice: Loud);
+            Assert.Equal(0.15f, Run(c, ref t, 800, 0f), 3);        // pause between sentences
+            Run(c, ref t, 1000, 0f);
+            Assert.Equal(1f, Run(c, ref t, 1000, 0f));             // they stopped talking
+        }
+
+        [Fact]
+        public void Voice_keeps_ducking_when_focus_changes()
+        {
+            var c = Fresh(Cfg(), out long t);
+            Run(c, ref t, 600, 0f, voice: Loud, app: "Premiere");
+            Assert.Equal(0.15f, Run(c, ref t, 300, 0f, voice: Loud, app: "Explorer"), 3);
+        }
+
+        [Fact]
+        public void Work_app_playing_is_not_reported_as_voice()
+        {
+            var c = Fresh(Cfg(), out long t);
+            Run(c, ref t, 600, Loud, voice: Loud);
+            Assert.False(c.ByVoice);
         }
 
         [Theory]

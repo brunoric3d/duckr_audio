@@ -33,6 +33,7 @@ Same skin as the main window. Three tabs (MUSIC APPS, NEVER TOUCH, WHILE FOCUSED
 
 - Click a name to edit it, or **+ add app** to add one. Typing searches the apps running right now (ones playing sound first); pick with Up/Down + Enter or a click. End a name with `*` to match anything that starts with it.
 - Each row shows if that app is PLAYING, has AUDIO, is RUNNING, or isn't open. **x** removes it.
+- **VOICE** (NEVER TOUCH tab, per app): when that app plays sound, your music lowers even if the app isn't focused. Made for calls: a friend talks on Discord and the music steps back. On by default for Discord, Teams, Zoom and Slack. Short pings are ignored (same "must play for" time).
 - **Force hotkey**: click the screen and press the keys you want. Backspace sets none.
 - **Must play for**: how long sound must last before lowering starts.
 

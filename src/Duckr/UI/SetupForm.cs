@@ -47,7 +47,7 @@ namespace Duckr
         private static readonly (ListKind Kind, string Title, string Hint, Color Led)[] Tabs =
         {
             (ListKind.Music, "MUSIC APPS", "Apps that play your music. These are what get lowered in MUSIC ONLY mode.", SkinColors.LedYellow),
-            (ListKind.Never, "NEVER TOUCH", "Never lowered and never trigger lowering: calls, streaming, OBS.", SkinColors.LedRed),
+            (ListKind.Never, "NEVER TOUCH", "Never lowered. VOICE on: when that app talks (a call), your music lowers.", SkinColors.LedRed),
             (ListKind.FocusOnly, "WHILE FOCUSED", "For DAWs on ASIO: other apps are lowered the whole time these are focused.", SkinColors.LcdCyan),
         };
 
@@ -383,7 +383,7 @@ namespace Duckr
                 using (var tb = new SolidBrush(SkinColors.ListText))
                 {
                     g.DrawString($"{i + 1}.", m_listFont, tb, row.Left + 4, row.Top + 2);
-                    g.DrawString(entry, m_listFont, tb, new RectangleF(row.Left + 28, row.Top + 2, 250, RowH));
+                    g.DrawString(entry, m_listFont, tb, new RectangleF(row.Left + 28, row.Top + 2, m_tab == ListKind.Never ? 196 : 250, RowH));
                 }
 
                 // status: playing / audio / running / not running
@@ -399,7 +399,11 @@ namespace Duckr
                 SkinPainter.Led(g, row.Right - 110, row.Top + RowH / 2, 2.6f, color, st != null);
                 m_dots.Draw(g, label, row.Right - 102, row.Top + 5, 1.3f, color);
 
-                if (entry.EndsWith('*'))
+                if (m_tab == ListKind.Never)
+                {
+                    DrawVoiceToggle(g, VoiceRect(row), IsVoice(entry), m_hot is RowHit rv && rv.Index == i && rv.Part == "voice");
+                }
+                else if (entry.EndsWith('*'))
                 {
                     using var wb = new SolidBrush(Color.FromArgb(0, 160, 0));
                     g.DrawString("matches start", m_tinyFont, wb, row.Right - 190, row.Top + 4);
@@ -428,6 +432,32 @@ namespace Duckr
                 ? "Type to search running apps.  Up/Down + Enter to pick.  End with * to match the start.  Esc cancels."
                 : "Click a name to edit it.  Click + add app to add one.";
             SkinPainter.DrawLabel(g, help, m_tinyFont, HelpLine.Left, HelpLine.Top, Color.FromArgb(190, 180, 150));
+        }
+
+        // ---- VOICE toggle (never touch tab) ------------------------------------------------
+
+        private static RectangleF VoiceRect(RectangleF row) => new(row.Right - 178, row.Top + 2, 58, RowH - 4);
+
+        private bool IsVoice(string entry) =>
+            m_engine.Settings.VoiceApps.Any(v => v.Trim().Equals(entry.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        private void SetVoice(string entry, bool on)
+        {
+            var voice = m_engine.Settings.VoiceApps;
+            voice.RemoveAll(v => v.Trim().Equals(entry.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (on) voice.Add(entry.Trim());
+            m_engine.SaveSettingsSoon();
+        }
+
+        private void DrawVoiceToggle(Graphics g, RectangleF r, bool on, bool hot)
+        {
+            var c = SkinColors.LcdCyan;
+            using (var b = new SolidBrush(on ? Color.FromArgb(hot ? 90 : 60, c) : Color.FromArgb(hot ? 40 : 14, c)))
+                g.FillRectangle(b, r);
+            using (var p = new Pen(on ? c : Color.FromArgb(hot ? 200 : 90, c))) g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
+            SkinPainter.Led(g, r.Left + 8, r.Top + r.Height / 2, 2.6f, c, on);
+            using var tb = new SolidBrush(on ? Color.White : Color.FromArgb(hot ? 230 : 150, c));
+            g.DrawString("VOICE", m_tinyFont, tb, r.Left + 15, r.Top + 1.5f);
         }
 
         private void DrawEditRowBack(Graphics g, RectangleF row, int i)
@@ -594,8 +624,15 @@ namespace Duckr
 
             if (m_editIndex < list.Count)
             {
+                string old = list[m_editIndex];
+                bool wasVoice = m_tab == ListKind.Never && IsVoice(old);
+                if (m_tab == ListKind.Never) SetVoice(old, false);
                 if (name.Length == 0 || duplicate) list.RemoveAt(m_editIndex);
-                else list[m_editIndex] = name;
+                else
+                {
+                    list[m_editIndex] = name;
+                    if (wasVoice) SetVoice(name, true); // renaming keeps the VOICE toggle
+                }
             }
             else if (name.Length > 0 && !duplicate)
             {
@@ -764,7 +801,10 @@ namespace Duckr
                 if (vi < VisibleRows && idx <= list.Count)
                 {
                     if (idx == list.Count) return new RowHit(idx, "add");
-                    return new RowHit(idx, RemoveRect(RowRect(vi)).Contains(p) ? "x" : "name");
+                    var rowRect = RowRect(vi);
+                    if (RemoveRect(rowRect).Contains(p)) return new RowHit(idx, "x");
+                    if (m_tab == ListKind.Never && VoiceRect(rowRect).Contains(p)) return new RowHit(idx, "voice");
+                    return new RowHit(idx, "name");
                 }
                 return null;
             }
@@ -852,7 +892,13 @@ namespace Duckr
                     if (m_tab != th.Kind) { m_tab = th.Kind; m_scroll = 0; }
                     Invalidate();
                     break;
+                case RowHit { Part: "voice" } rvo:
+                    var ventry = CurrentList()[rvo.Index];
+                    SetVoice(ventry, !IsVoice(ventry));
+                    Invalidate();
+                    break;
                 case RowHit { Part: "x" } rx:
+                    if (m_tab == ListKind.Never) SetVoice(CurrentList()[rx.Index], false);
                     CurrentList().RemoveAt(rx.Index);
                     m_engine.SaveSettingsSoon();
                     Invalidate();
@@ -873,6 +919,11 @@ namespace Duckr
                     var list = CurrentList();
                     list.Clear();
                     list.AddRange(DefaultList(m_tab));
+                    if (m_tab == ListKind.Never)
+                    {
+                        m_engine.Settings.VoiceApps.Clear();
+                        m_engine.Settings.VoiceApps.AddRange(new DuckrSettings().VoiceApps);
+                    }
                     m_scroll = 0;
                     m_engine.SaveSettingsSoon();
                     Invalidate();

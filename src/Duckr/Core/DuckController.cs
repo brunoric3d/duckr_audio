@@ -29,6 +29,9 @@ namespace Duckr
         /// <summary>User pressed the hotkey to force ducking on.</summary>
         public bool ForceDuck { get; init; }
 
+        /// <summary>Loudest peak (0..1) of the VOICE apps (calls), focused or not.</summary>
+        public float VoicePeak { get; init; }
+
         /// <summary>Identifies the focused app (process name). A change means focus moved.</summary>
         public string? FocusKey { get; init; }
     }
@@ -88,6 +91,11 @@ namespace Duckr
 
         public DuckState State { get; private set; } = DuckState.Idle;
 
+        /// <summary>True when the current or last reason for ducking was a VOICE app (someone talking on a call).</summary>
+        public bool ByVoice { get; private set; }
+
+        private long m_voiceAboveSinceMs = -1;
+
         /// <summary>True when any gain below 1 is applied (other apps need their volume managed).</summary>
         public bool IsAffectingOthers => Gain < 0.9999f;
 
@@ -101,6 +109,8 @@ namespace Duckr
             m_lastActiveMs = NeverMs;
             m_lastNowMs = -1;
             m_focusKey = null;
+            m_voiceAboveSinceMs = -1;
+            ByVoice = false;
             m_alreadyPlaying = false;
             m_quietSinceMs = -1;
         }
@@ -174,6 +184,22 @@ namespace Duckr
                     active = m_wantDuck || now - m_aboveSinceMs >= m_settings.AttackMs;
                 }
             }
+
+            // 1b) A VOICE app (call) is talking? Works in the background, regardless of
+            //     focus. Same attack time, so short notification pings don't duck.
+            bool voice = false;
+            if (input.VoicePeak >= m_settings.ThresholdLinear)
+            {
+                if (m_voiceAboveSinceMs < 0) m_voiceAboveSinceMs = now;
+                voice = m_wantDuck || now - m_voiceAboveSinceMs >= m_settings.AttackMs;
+            }
+            else
+            {
+                m_voiceAboveSinceMs = -1;
+            }
+            if (active) ByVoice = false;
+            else if (voice) ByVoice = true;
+            active |= voice;
 
             // 2) Decide the target, with release delay.
             if (active)
