@@ -50,18 +50,6 @@ namespace Duckr
             public float LastSet;
         }
 
-        /// <summary>Sessions just restored: instance id -> volume they must keep for VerifyMs.</summary>
-        private readonly Dictionary<string, Verify> m_verify = new();
-
-        private sealed class Verify
-        {
-            public float Original;
-            public long UntilMs;
-        }
-
-        private const long VerifyMs = 1500;
-        private long m_nowMs;
-
         // other tools that also change app volumes and would fight with Duckr
         private static readonly string[] ConflictingProcesses = { "WinBGMuter" };
         private long m_lastConflictCheckMs = NeverMs;
@@ -203,7 +191,6 @@ namespace Duckr
             long now = m_clock.ElapsedMilliseconds;
             try
             {
-                m_nowMs = now;
                 m_tickCount++;
                 if (m_tickCount <= 2) DebugLog.Write($"tick {m_tickCount}: start");
 
@@ -291,32 +278,10 @@ namespace Duckr
                     if (t != null)
                     {
                         s.SetVolume(t.Original);
-                        // double check for a moment: if something pushes it back down, set it again
-                        m_verify[s.InstanceId] = new Verify { Original = t.Original, UntilMs = m_nowMs + VerifyMs };
                         m_tracked.Remove(s.InstanceId);
                         journalDirty = true;
                     }
-                    else if (m_verify.TryGetValue(s.InstanceId, out var v))
-                    {
-                        if (m_nowMs > v.UntilMs)
-                        {
-                            m_verify.Remove(s.InstanceId);
-                            journalDirty = true;
-                        }
-                        else if (s.Volume is float cur && cur < v.Original - 0.02f && s.SetVolume(v.Original))
-                        {
-                            DuckrLog.Write($"[+] Duckr: volume of {s.ProcessName} was {cur:0.00} after restore, set back to {v.Original:0.00}");
-                        }
-                    }
                     continue;
-                }
-
-                // ducking again before the double check ended: the verified value is the real one
-                if (t == null && m_verify.Remove(s.InstanceId, out var pending))
-                {
-                    t = new Tracked { Original = pending.Original, LastSet = s.Volume ?? pending.Original };
-                    m_tracked[s.InstanceId] = t;
-                    journalDirty = true;
                 }
 
                 float? current = s.Volume;
@@ -349,50 +314,29 @@ namespace Duckr
         {
             var alive = new HashSet<string>(m_scanner.Sessions.Select(s => s.InstanceId));
             var gone = m_tracked.Keys.Where(k => !alive.Contains(k)).ToList();
-            var goneVerify = m_verify.Keys.Where(k => !alive.Contains(k)).ToList();
-            if (gone.Count == 0 && goneVerify.Count == 0) return;
+            if (gone.Count == 0) return;
             foreach (var k in gone) m_tracked.Remove(k);
-            foreach (var k in goneVerify) m_verify.Remove(k);
             WriteJournal();
         }
 
         private void RestoreAll()
         {
-            var pending = m_tracked.ToDictionary(kv => kv.Key, kv => kv.Value.Original);
-            foreach (var kv in m_verify) pending.TryAdd(kv.Key, kv.Value.Original);
-
-            // set every volume back, then read it back; retry what didn't stick
-            for (int attempt = 0; attempt < 4 && pending.Count > 0; attempt++)
+            if (m_tracked.Count > 0)
             {
                 try
                 {
-                    if (attempt > 0) Thread.Sleep(80);
                     m_scanner.Rescan();
-                    var alive = new HashSet<string>();
                     foreach (var s in m_scanner.Sessions)
-                    {
-                        if (!pending.TryGetValue(s.InstanceId, out float original)) continue;
-                        alive.Add(s.InstanceId);
-                        s.SetVolume(original);
-                        if (s.Volume is float now && Math.Abs(now - original) <= 0.01f)
-                            pending.Remove(s.InstanceId);
-                    }
-                    // sessions that are gone (app closed) can't be restored and don't need it
-                    foreach (var k in pending.Keys.Where(k => !alive.Contains(k)).ToList())
-                        pending.Remove(k);
+                        if (m_tracked.TryGetValue(s.InstanceId, out var t))
+                            s.SetVolume(t.Original);
                 }
                 catch (Exception ex)
                 {
                     DuckrLog.Write($"[!] Duckr restore error: {ex.Message}");
                 }
+                m_tracked.Clear();
             }
-            if (pending.Count > 0)
-                DuckrLog.Write($"[!] Duckr could not confirm {pending.Count} restored volume(s); the safety file keeps them for next start");
-
-            m_tracked.Clear();
-            m_verify.Clear();
-            if (pending.Count > 0) WriteJournal(pending);
-            else WriteJournal();
+            WriteJournal();
         }
 
         private void SetState(DuckState state)
@@ -408,13 +352,11 @@ namespace Duckr
 
         private static string JournalPath => Path.Combine(DuckrSettings.DefaultFolder, "ducked-volumes.json");
 
-        private void WriteJournal(Dictionary<string, float>? explicitData = null)
+        private void WriteJournal()
         {
             try
             {
-                var data = explicitData ?? m_tracked.ToDictionary(kv => kv.Key, kv => kv.Value.Original);
-                if (explicitData == null)
-                    foreach (var kv in m_verify) data.TryAdd(kv.Key, kv.Value.Original);
+                var data = m_tracked.ToDictionary(kv => kv.Key, kv => kv.Value.Original);
                 if (data.Count == 0)
                 {
                     if (File.Exists(JournalPath)) File.Delete(JournalPath);
