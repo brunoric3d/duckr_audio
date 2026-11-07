@@ -66,7 +66,11 @@ Double-click `make-installer.bat`. It installs the Velopack packaging tool (`vpk
 
 The installer is one click: it shows the Duckr splash, installs per user to `%LocalAppData%\Duckr` (no admin needed), adds Start menu and desktop shortcuts and opens Duckr. Uninstall from Windows Settings > Apps; that also removes "start with Windows".
 
-For a new release, bump `VERSION` in `make-installer.bat` and `<Version>` in `src\Duckr\Duckr.csproj`.
+Every local run gets a newer dev version (`0.1.0-dev.<minutes>`), so running the new Setup.exe over an installed Duckr updates it: when it asks to overwrite, answer **Yes**. For a release version, pass it: `make-installer.bat 0.2.0`.
+
+## Updates
+
+The installed Duckr checks GitHub releases 15 seconds after it starts and shows a tray balloon when a new version is out. Right-click the tray icon > **Update to x.y.z** (or **Check for updates**) to download it; Duckr puts all volumes back, installs the update and restarts. Copies run from a build folder don't update.
 
 ### Releases on GitHub
 

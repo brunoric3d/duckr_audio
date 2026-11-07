@@ -22,6 +22,11 @@ namespace Duckr
         private readonly Icon m_iconDucking = LoadIcon("duckr_ducking.ico");
         private readonly Icon m_iconOff = LoadIcon("duckr_off.ico");
 
+        private readonly Updater m_updater = new();
+        private readonly ToolStripMenuItem m_updateItem;
+        private readonly System.Windows.Forms.Timer m_updateTimer = new() { Interval = 15000 };
+
+        private Font? m_boldMenuFont;
         private SkinForm? m_skin;
         private SetupForm? m_setup;
         private bool m_exiting;
@@ -45,6 +50,7 @@ namespace Duckr
                 if (IsOn) m_engine.ForceDuck = !m_engine.ForceDuck;
             });
             m_startupItem = new ToolStripMenuItem("Start with Windows", null, (_, _) => SetAutostart(!Autostart.IsEnabled));
+            m_updateItem = new ToolStripMenuItem("Check for updates", null, async (_, _) => await UpdateClicked());
 
             var menu = new ContextMenuStrip();
             menu.Items.Add(new ToolStripMenuItem("Open Duckr", null, (_, _) => ShowSkin()) { Font = new Font(menu.Font, FontStyle.Bold) });
@@ -53,6 +59,7 @@ namespace Duckr
             menu.Items.Add(m_forceItem);
             menu.Items.Add(new ToolStripMenuItem("Setup...", null, (_, _) => ShowSetup()));
             menu.Items.Add(m_startupItem);
+            menu.Items.Add(m_updateItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => ExitDuckr()));
             menu.Opening += (_, _) => UpdateTray();
@@ -76,6 +83,59 @@ namespace Duckr
 
             if (!startInTray)
                 ShowSkin();
+
+            // quiet update check a little after startup (only for installed copies)
+            if (m_updater.IsInstalled)
+            {
+                m_updateTimer.Tick += async (_, _) =>
+                {
+                    m_updateTimer.Stop();
+                    string? v = await m_updater.CheckAsync();
+                    UpdateTray();
+                    if (v != null)
+                        m_tray.ShowBalloonTip(6000, "Duckr update", $"Duckr {v} is available. Right-click the tray icon > Update.", ToolTipIcon.Info);
+                };
+                m_updateTimer.Start();
+            }
+        }
+
+        private async Task UpdateClicked()
+        {
+            if (!m_updater.IsInstalled)
+            {
+                MessageBox.Show("Updates work in the installed Duckr. This copy runs from a build folder.",
+                    "Duckr", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (m_updater.Busy) return;
+
+            if (m_updater.PendingVersion == null)
+            {
+                m_updateItem.Text = "Checking for updates...";
+                string? v = await m_updater.CheckAsync();
+                UpdateTray();
+                if (v == null)
+                {
+                    m_tray.ShowBalloonTip(3000, "Duckr", $"You have the latest version ({m_updater.CurrentVersion}).", ToolTipIcon.Info);
+                    return;
+                }
+            }
+
+            string target = m_updater.PendingVersion!;
+            var answer = MessageBox.Show($"Update Duckr from {m_updater.CurrentVersion} to {target} now?\n\nDuckr restarts by itself.",
+                "Duckr update", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return;
+
+            m_updateItem.Text = $"Downloading {target}...";
+            m_tray.ShowBalloonTip(3000, "Duckr update", $"Downloading {target}...", ToolTipIcon.Info);
+            // put every lowered volume back before the app closes for the update
+            bool ok = await m_updater.DownloadAndRestartAsync(() => m_engine.Stop());
+            if (!ok)
+            {
+                UpdateTray();
+                m_tray.ShowBalloonTip(5000, "Duckr update", "The update failed. Check your connection and try again.", ToolTipIcon.Warning);
+                if (m_engine.Settings.Enabled && !IsOn) SetOn(true, save: false);
+            }
         }
 
         private bool IsOn => m_engine.IsRunning;
@@ -149,6 +209,13 @@ namespace Duckr
             string hk = m_engine.Settings.ForceDuckHotkey;
             m_forceItem.Text = hk.Length > 0 ? $"Force lower other apps ({hk})" : "Force lower other apps";
             m_startupItem.Checked = Autostart.IsEnabled;
+            if (!m_updater.Busy)
+            {
+                string? pending = m_updater.PendingVersion;
+                m_updateItem.Text = pending != null ? $"Update to {pending}" : "Check for updates";
+                m_boldMenuFont ??= new Font(m_updateItem.Owner?.Font ?? SystemFonts.MenuFont!, FontStyle.Bold);
+                m_updateItem.Font = pending != null ? m_boldMenuFont : null;
+            }
 
             bool lowering = on && (m_engine.ForceDuck || m_engine.State != DuckState.Idle);
             m_tray.Icon = !on ? m_iconOff : lowering ? m_iconDucking : m_iconOn;
@@ -184,6 +251,7 @@ namespace Duckr
             {
                 if (!m_exiting) { m_exiting = true; m_engine.Dispose(); }
                 m_showWait.Unregister(null);
+                m_updateTimer.Dispose();
                 m_tray.Visible = false;
                 m_tray.Dispose();
                 m_invoker.Dispose();
