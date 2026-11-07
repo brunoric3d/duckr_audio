@@ -16,6 +16,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- installer: one-click Setup.exe, per-user install (see make-installer.bat) -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Assets\duckr_on.ico" LogicalName="duckr_on.ico" />
     <EmbeddedResource Include="Assets\duckr_ducking.ico" LogicalName="duckr_ducking.ico" />
     <EmbeddedResource Include="Assets\duckr_off.ico" LogicalName="duckr_off.ico" />

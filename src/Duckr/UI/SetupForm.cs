@@ -502,7 +502,7 @@ namespace Duckr
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 g.DrawString("x", m_tinyFont, b, HotkeyClear, sf);
 
-            string note = m_capturingHotkey ? "Esc cancels, Backspace sets none" : "click the screen, then press the keys";
+            string note = m_capturingHotkey ? "Esc cancel  ·  Bksp none" : "click, then press keys";
             SkinPainter.DrawLabel(g, note, m_tinyFont, HotkeyClear.Right + 8, SectionTop + 5, Color.FromArgb(190, 180, 150));
         }
 

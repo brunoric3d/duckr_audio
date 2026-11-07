@@ -21,7 +21,6 @@ namespace Duckr.Skin
         private const int W = 470, H = 440;
 
         private static readonly RectangleF TitleBar = new(0, 0, W, 20);
-        private static readonly RectangleF BtnMin = new(W - 38, 5, 13, 11);
         private static readonly RectangleF BtnClose = new(W - 21, 5, 13, 11);
 
         private static readonly RectangleF Lcd = new(12, 30, 300, 84);
@@ -120,6 +119,15 @@ namespace Duckr.Skin
             m_anim.Tick += (_, _) => Animate();
             VisibleChanged += (_, _) => { if (Visible) m_anim.Start(); else m_anim.Stop(); };
             DpiChanged += (_, _) => ApplyScale();
+            // minimizing (taskbar click, Win+D) goes to the tray like the x button
+            Resize += (_, _) =>
+            {
+                if (WindowState == FormWindowState.Minimized)
+                {
+                    Hide();
+                    WindowState = FormWindowState.Normal;
+                }
+            };
         }
 
         protected override CreateParams CreateParams
@@ -228,7 +236,7 @@ namespace Duckr.Skin
             var tsize = g.MeasureString(title, m_titleFont);
             float tx = (W - tsize.Width) / 2f;
             SkinPainter.TitleRidges(g, 10, tx - 8, 10);
-            SkinPainter.TitleRidges(g, tx + tsize.Width + 8, BtnMin.Left - 8, 10);
+            SkinPainter.TitleRidges(g, tx + tsize.Width + 8, BtnClose.Left - 8, 10);
             SkinPainter.DrawLabel(g, title, m_titleFont, tx, 4);
 
             // wells
@@ -339,13 +347,13 @@ namespace Duckr.Skin
 
         private void DrawTitleButtons(Graphics g)
         {
-            foreach (var (r, glyph) in new[] { (BtnMin, "_"), (BtnClose, "x") })
+            foreach (var (r, glyph) in new[] { (BtnClose, "x") })
             {
                 bool hot = Equals(m_hot, glyph);
                 SkinPainter.DrawButton(g, r, pressed: false, hot: hot);
                 using var b = new SolidBrush(hot ? Color.White : SkinColors.Gold);
                 using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-                g.DrawString(glyph, m_tinyFont, b, new RectangleF(r.X, r.Y - (glyph == "_" ? 3 : 1), r.Width, r.Height), sf);
+                g.DrawString(glyph, m_tinyFont, b, new RectangleF(r.X, r.Y - 1, r.Width, r.Height), sf);
             }
         }
 
@@ -566,7 +574,6 @@ namespace Duckr.Skin
 
         private object? HitTest(PointF p)
         {
-            if (BtnMin.Contains(p)) return "_";
             if (BtnClose.Contains(p)) return "x";
             foreach (var b in m_buttons) if (b.Rect.Contains(p)) return b;
             foreach (var s in m_sliders) if (s.Row.Contains(p)) return s;
@@ -601,7 +608,7 @@ namespace Duckr.Skin
             if (!Equals(hot, m_hot))
             {
                 m_hot = hot;
-                Cursor = hot is SliderDef || hot is ButtonDef || hot is ValueTuple<string, string> || hot is "_" || hot is "x"
+                Cursor = hot is SliderDef || hot is ButtonDef || hot is ValueTuple<string, string> || hot is "x"
                     ? Cursors.Hand : Cursors.Default;
                 Invalidate();
             }
@@ -669,9 +676,6 @@ namespace Duckr.Skin
 
             switch (hit)
             {
-                case "_":
-                    Hide();
-                    break;
                 case "x":
                     Hide();
                     break;

@@ -107,6 +107,12 @@ namespace Duckr
                     openSetup: ShowSetup,
                     isAutostart: () => Autostart.IsEnabled,
                     setAutostart: SetAutostart);
+                // hiding the main window (x) also closes Setup
+                m_skin.VisibleChanged += (_, _) =>
+                {
+                    if (m_skin is { Visible: false } && m_setup != null && !m_setup.IsDisposed)
+                        m_setup.Close();
+                };
             }
             m_skin.Show();
             if (m_skin.WindowState == FormWindowState.Minimized) m_skin.WindowState = FormWindowState.Normal;

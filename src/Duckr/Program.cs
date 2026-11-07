@@ -3,6 +3,8 @@
  *  Licensed under GNU GPL v3. See LICENSE.
  */
 
+using Velopack;
+
 namespace Duckr
 {
     internal static class Program
@@ -13,6 +15,12 @@ namespace Duckr
         [STAThread]
         private static void Main(string[] args)
         {
+            // Must run first: handles install / uninstall hooks from the Velopack
+            // installer and exits on its own when it was started for one of them.
+            VelopackApp.Build()
+                .OnBeforeUninstallFastCallback(_ => Autostart.Set(false))
+                .Run();
+
             bool startInTray = args.Any(a => a.Equals("--tray", StringComparison.OrdinalIgnoreCase));
 
             // one Duckr at a time; starting it again just brings the window up

@@ -57,8 +57,16 @@ The app ends up in `src\Duckr\bin\Release\net10.0-windows\Duckr.exe`.
 
 A debug log (`duckr-debug.log`) is written next to the exe.
 
+## Installer
+
+Double-click `make-installer.bat`. It installs the Velopack packaging tool (`vpk`), builds a self-contained Duckr (.NET included) and makes `releases\Duckr-win-Setup.exe`. Progress goes to `installer-log.txt`.
+
+The installer is one click: it shows the Duckr splash, installs per user to `%LocalAppData%\Duckr` (no admin needed), adds Start menu and desktop shortcuts and opens Duckr. Uninstall from Windows Settings > Apps; that also removes "start with Windows".
+
+For a new release, bump `VERSION` in `make-installer.bat` and `<Version>` in `src\Duckr\Duckr.csproj`.
+
 ## License and credits
 
-Duckr is licensed under the **GNU GPL v3** (see `LICENSE`).
+Duckr is licensed under the **GNU GPL v3** (see `LICENSE`). The installer uses [Velopack](https://github.com/velopack/velopack) (MIT).
 
 Duckr started as a fork of [Background Muter](https://github.com/nefares/Background-Muter) by Nefares (GPL v3), which automatically mutes apps in the background. Thanks to that project for the starting point.
