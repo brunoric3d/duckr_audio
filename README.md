@@ -16,6 +16,10 @@ Duckr is a small Windows tray app for people who edit video or make music while 
 - Volumes always come back: on exit, when you turn Duckr off, and after a crash (a safety file in `%APPDATA%\Duckr` restores them on the next start).
 - Works across all output devices (audio interface, headphones, speakers).
 
+## Quick setup
+
+The first time Duckr starts (right after installing), a one-page Quick setup asks what to lower (all other apps or music apps only), how low (mute, 15%, 35%), whether voice calls lower the music, and whether to start with Windows. START DUCKR saves and opens the main window. Reopen it any time from the tray: **Quick setup...**
+
 ## The window
 
 - **Screen**: status (LISTENING, DUCKING, HOLD, FORCED, POWER OFF), the focused app and its level, and where the other apps are.

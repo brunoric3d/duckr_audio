@@ -67,6 +67,7 @@ namespace Duckr
             menu.Items.Add(m_forceItem);
             menu.Items.Add(m_voiceItem);
             menu.Items.Add(new ToolStripMenuItem("Setup...", null, (_, _) => ShowSetup()));
+            menu.Items.Add(new ToolStripMenuItem("Quick setup...", null, (_, _) => ShowQuickSetup(openMainAfter: false)));
             menu.Items.Add(m_startupItem);
             menu.Items.Add(m_updateItem);
             menu.Items.Add(new ToolStripSeparator());
@@ -90,7 +91,9 @@ namespace Duckr
                 SetOn(true, save: false);
             UpdateTray();
 
-            if (!startInTray)
+            if (!settings.FirstRunDone)
+                ShowQuickSetup(openMainAfter: true);
+            else if (!startInTray)
                 ShowSkin();
 
             // quiet update check a little after startup (only for installed copies)
@@ -187,6 +190,30 @@ namespace Duckr
             m_skin.Activate();
         }
 
+        private QuickSetupForm? m_quick;
+
+        private void ShowQuickSetup(bool openMainAfter)
+        {
+            if (m_quick != null && !m_quick.IsDisposed)
+            {
+                m_quick.Activate();
+                return;
+            }
+            m_quick = new QuickSetupForm(m_engine);
+            m_quick.Finished += (_, _) =>
+            {
+                UpdateTray();
+                m_skin?.Invalidate();
+            };
+            m_quick.FormClosed += (_, _) =>
+            {
+                m_quick = null;
+                if (openMainAfter) ShowSkin();
+            };
+            m_quick.Show();
+            m_quick.Activate();
+        }
+
         private void ShowSetup()
         {
             if (m_setup != null && !m_setup.IsDisposed)
@@ -251,6 +278,7 @@ namespace Duckr
             m_tray.Visible = false;
             m_skin?.Dispose();
             m_setup?.Dispose();
+            m_quick?.Dispose();
             ExitThread();
         }
 

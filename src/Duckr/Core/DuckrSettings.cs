@@ -25,6 +25,9 @@ namespace Duckr
         /// <summary>When on, Duckr is listening and lowering other apps.</summary>
         public bool Enabled { get; set; } = true;
 
+        /// <summary>Quick setup was shown (first start). False makes it open on next start.</summary>
+        public bool FirstRunDone { get; set; }
+
         public DuckScope Scope { get; set; } = DuckScope.AllOtherApps;
 
         // ---- levels and timing ---------------------------------------------
