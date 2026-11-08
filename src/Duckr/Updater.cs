@@ -13,7 +13,7 @@ namespace Duckr
 {
     internal sealed class Updater
     {
-        public const string RepoUrl = "https://github.com/brunoric3d/duckr";
+        public const string RepoUrl = "https://github.com/brunoric3d/duckr_audio";
 
         private readonly UpdateManager? m_manager;
         private UpdateInfo? m_pending;

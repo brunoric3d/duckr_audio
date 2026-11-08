@@ -1,6 +1,6 @@
 # Duckr
 
-[Download the latest installer](https://github.com/brunoric3d/duckr/releases/latest)
+[Download the latest installer](https://github.com/brunoric3d/duckr_audio/releases/latest)
 
 **Your music steps back when your work plays.**
 

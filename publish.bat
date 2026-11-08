@@ -1,5 +1,5 @@
 @echo off
-rem Pushes Duckr to https://github.com/brunoric3d/duckr and, optionally,
+rem Pushes Duckr to https://github.com/brunoric3d/duckr_audio and, optionally,
 rem tags a release so GitHub Actions builds the installer and publishes it.
 cd /d "%~dp0"
 echo.
@@ -20,7 +20,7 @@ git tag v%TAG%
 git push origin v%TAG%
 echo.
 echo  Tag v%TAG% pushed. GitHub Actions is now building the installer:
-echo  https://github.com/brunoric3d/duckr/actions
+echo  https://github.com/brunoric3d/duckr_audio/actions
 :end
 echo.
 pause
