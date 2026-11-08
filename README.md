@@ -66,9 +66,9 @@ A debug log (`duckr-debug.log`) is written next to the exe.
 
 ## Installer
 
-Double-click `make-installer.bat`. It installs the Velopack packaging tool (`vpk`), builds a self-contained Duckr (.NET included) and makes `releases\Duckr-win-Setup.exe`. Progress goes to `installer-log.txt`.
+Double-click `make-installer.bat`. It installs the Velopack packaging tool (`vpk`), builds Duckr and makes `releases\Duckr-win-Setup.exe`. Progress goes to `installer-log.txt`.
 
-The installer is one click: it shows the Duckr splash, installs per user to `%LocalAppData%\Duckr` (no admin needed), adds Start menu and desktop shortcuts and opens Duckr. Uninstall from Windows Settings > Apps; that also removes "start with Windows".
+The installer is small (.NET is not bundled): if the .NET 10 Desktop Runtime is missing, it downloads and installs it first. It is one click: it shows the Duckr splash, installs per user to `%LocalAppData%\Duckr` (no admin needed), adds Start menu and desktop shortcuts and opens Duckr. Uninstall from Windows Settings > Apps; that also removes "start with Windows".
 
 Every local run gets a newer dev version (`0.1.0-dev.<minutes>`), so running the new Setup.exe over an installed Duckr updates it: when it asks to overwrite, answer **Yes**. For a release version, pass it: `make-installer.bat 0.2.0`.
 
