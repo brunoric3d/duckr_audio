@@ -40,8 +40,6 @@ namespace Duckr.Skin
         private readonly Func<bool> m_isOn;
         private readonly Action<bool> m_setOn;
         private readonly Action m_openSetup;
-        private readonly Func<bool> m_isAutostart;
-        private readonly Action<bool> m_setAutostart;
 
         private readonly System.Windows.Forms.Timer m_anim = new() { Interval = 33 };
         private readonly List<SliderDef> m_sliders = new();
@@ -91,15 +89,15 @@ namespace Duckr.Skin
             public RectangleF Rect;
         }
 
-        public SkinForm(DuckEngine engine, Func<bool> isOn, Action<bool> setOn, Action openSetup,
-                        Func<bool> isAutostart, Action<bool> setAutostart)
+        /// <summary>Raised when the VOICE CALL button is clicked (so the tray can refresh).</summary>
+        public event EventHandler? VoiceCallChanged;
+
+        public SkinForm(DuckEngine engine, Func<bool> isOn, Action<bool> setOn, Action openSetup)
         {
             m_engine = engine;
             m_isOn = isOn;
             m_setOn = setOn;
             m_openSetup = openSetup;
-            m_isAutostart = isAutostart;
-            m_setAutostart = setAutostart;
 
             Text = "Duckr";
             FormBorderStyle = FormBorderStyle.None;
@@ -199,8 +197,13 @@ namespace Duckr.Skin
             Add(new ButtonDef { Text = "SETUP", Click = () => m_openSetup(), LedColor = SkinColors.LcdCyan });
             Add(new ButtonDef
             {
-                Text = "STARTUP", Lit = () => m_isAutostart(), LedColor = SkinColors.LcdCyan,
-                Click = () => m_setAutostart(!m_isAutostart()),
+                Text = "VOICE CALL", Lit = () => m_engine.Settings.VoiceCallEnabled, LedColor = SkinColors.LcdCyan,
+                Click = () =>
+                {
+                    m_engine.Settings.VoiceCallEnabled = !m_engine.Settings.VoiceCallEnabled;
+                    m_engine.SaveSettingsSoon();
+                    VoiceCallChanged?.Invoke(this, EventArgs.Empty);
+                },
             });
         }
 

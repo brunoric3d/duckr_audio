@@ -15,6 +15,7 @@ namespace Duckr
         private readonly ToolStripMenuItem m_powerItem;
         private readonly ToolStripMenuItem m_forceItem;
         private readonly ToolStripMenuItem m_startupItem;
+        private readonly ToolStripMenuItem m_voiceItem;
         private readonly Control m_invoker = new();
         private readonly RegisteredWaitHandle m_showWait;
 
@@ -50,6 +51,13 @@ namespace Duckr
                 if (IsOn) m_engine.ForceDuck = !m_engine.ForceDuck;
             });
             m_startupItem = new ToolStripMenuItem("Start with Windows", null, (_, _) => SetAutostart(!Autostart.IsEnabled));
+            m_voiceItem = new ToolStripMenuItem("Voice call (calls lower the music)", null, (_, _) =>
+            {
+                m_engine.Settings.VoiceCallEnabled = !m_engine.Settings.VoiceCallEnabled;
+                m_engine.SaveSettingsSoon();
+                UpdateTray();
+                m_skin?.Invalidate();
+            });
             m_updateItem = new ToolStripMenuItem("Check for updates", null, async (_, _) => await UpdateClicked());
 
             var menu = new ContextMenuStrip();
@@ -57,6 +65,7 @@ namespace Duckr
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(m_powerItem);
             menu.Items.Add(m_forceItem);
+            menu.Items.Add(m_voiceItem);
             menu.Items.Add(new ToolStripMenuItem("Setup...", null, (_, _) => ShowSetup()));
             menu.Items.Add(m_startupItem);
             menu.Items.Add(m_updateItem);
@@ -164,9 +173,8 @@ namespace Duckr
                 m_skin = new SkinForm(m_engine,
                     isOn: () => IsOn,
                     setOn: on => SetOn(on),
-                    openSetup: ShowSetup,
-                    isAutostart: () => Autostart.IsEnabled,
-                    setAutostart: SetAutostart);
+                    openSetup: ShowSetup);
+                m_skin.VoiceCallChanged += (_, _) => UpdateTray();
                 // hiding the main window (x) also closes Setup
                 m_skin.VisibleChanged += (_, _) =>
                 {
@@ -209,6 +217,7 @@ namespace Duckr
             string hk = m_engine.Settings.ForceDuckHotkey;
             m_forceItem.Text = hk.Length > 0 ? $"Force lower other apps ({hk})" : "Force lower other apps";
             m_startupItem.Checked = Autostart.IsEnabled;
+            m_voiceItem.Checked = m_engine.Settings.VoiceCallEnabled;
             if (!m_updater.Busy)
             {
                 string? pending = m_updater.PendingVersion;

@@ -21,7 +21,7 @@ Duckr is a small Windows tray app for people who edit video or make music while 
 - **Screen**: status (LISTENING, DUCKING, HOLD, FORCED, POWER OFF), the focused app and its level, and where the other apps are.
 - **Meters**: FOCUS level and OTHERS volume.
 - **Sliders**: duck level (0% = mute), fade down, fade up, hold, sensitivity. Changes apply at once and save themselves. The mouse wheel works on them.
-- **Buttons**: POWER, FORCE (also `Ctrl+Alt+D` anywhere), ALL APPS / MUSIC ONLY, SETUP, STARTUP (start with Windows).
+- **Buttons**: POWER, FORCE (also `Ctrl+Alt+D` anywhere), ALL APPS / MUSIC ONLY, SETUP, VOICE CALL (calls lower the music, see below). Start with Windows is in the tray menu.
 - **Apps list**: every app using audio with a live level. Click **M**, **N** or **F** on a row to put it in a list:
   - **M** Music apps: what gets lowered in MUSIC ONLY mode.
   - **N** Never touch: never lowered and never triggers (calls, OBS).
@@ -33,7 +33,7 @@ Same skin as the main window. Three tabs (MUSIC APPS, NEVER TOUCH, WHILE FOCUSED
 
 - Click a name to edit it, or **+ add app** to add one. Typing searches the apps running right now (ones playing sound first); pick with Up/Down + Enter or a click. End a name with `*` to match anything that starts with it.
 - Each row shows if that app is PLAYING, has AUDIO, is RUNNING, or isn't open. **x** removes it.
-- **VOICE** (NEVER TOUCH tab, per app): when that app plays sound, your music lowers even if the app isn't focused. Made for calls: a friend talks on Discord and the music steps back. On by default for Discord, Teams, Zoom and Slack. Short pings are ignored (same "must play for" time).
+- **VOICE** (NEVER TOUCH tab, per app): when that app plays sound, your music lowers even if the app isn't focused. Made for calls: a friend talks on Discord and the music steps back. Works only while the **VOICE CALL** button (main window or tray) is on; it starts off. VOICE is preset for Discord, Teams, Zoom and Slack. Short pings are ignored (same "must play for" time).
 - **Force hotkey**: click the screen and press the keys you want. Backspace sets none.
 - **Must play for**: how long sound must last before lowering starts.
 

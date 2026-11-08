@@ -47,7 +47,7 @@ namespace Duckr
         private static readonly (ListKind Kind, string Title, string Hint, Color Led)[] Tabs =
         {
             (ListKind.Music, "MUSIC APPS", "Apps that play your music. These are what get lowered in MUSIC ONLY mode.", SkinColors.LedYellow),
-            (ListKind.Never, "NEVER TOUCH", "Never lowered. VOICE on: when that app talks (a call), your music lowers.", SkinColors.LedRed),
+            (ListKind.Never, "NEVER TOUCH", "Never lowered. VOICE: when it talks, music lowers (needs VOICE CALL on).", SkinColors.LedRed),
             (ListKind.FocusOnly, "WHILE FOCUSED", "For DAWs on ASIO: other apps are lowered the whole time these are focused.", SkinColors.LcdCyan),
         };
 

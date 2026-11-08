@@ -65,6 +65,9 @@ namespace Duckr
             "Discord", "Teams", "ms-teams", "Zoom", "Slack", "obs64", "Streamlabs*",
         };
 
+        /// <summary>Main switch for VOICE apps (VOICE CALL button). Off: calls never lower the music.</summary>
+        public bool VoiceCallEnabled { get; set; } = false;
+
         /// <summary>
         /// Never-touch apps whose sound lowers the music even when they are not
         /// focused: a friend talking on a call. Per app, toggled in Setup.

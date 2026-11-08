@@ -86,6 +86,7 @@ namespace Duckr
         public string VoiceApp { get; private set; } = "";
 
         private bool IsVoiceApp(string name) =>
+            m_settings.VoiceCallEnabled &&
             DuckrSettings.Matches(m_settings.VoiceApps, name) && DuckrSettings.Matches(m_settings.NeverTouchApps, name);
 
         /// <summary>Gain applied to other apps right now (1 = untouched).</summary>
